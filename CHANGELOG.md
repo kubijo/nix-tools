@@ -8,4 +8,6 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-23
+
 - Initial release. `repofmt` over 21 languages, `repochk` over 8 linters, behind one `lib.configure`. See the README.
