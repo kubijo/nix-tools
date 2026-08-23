@@ -161,6 +161,43 @@ rec {
     esac
   '';
 
+  # A wrapped formatter has to fold its argv into the wrapper. Left in `options`, treefmt
+  # hands it over beside the file list, where the loop reads it as one more file to format.
+  wrappedArgv =
+    let
+      project = configure {
+        inherit system toolPkgs;
+        src = ./.;
+        inherit (toolPkgs) nodejs;
+        format.svg = {
+          configFile = ./conf/yamlfmt-indent4.yml;
+          extraOptions = [ "--pretty" ];
+        };
+      };
+    in
+    toolPkgs.runCommandLocal "wrapped-argv" { } ''
+      config=$(grep -o '/nix/store/[a-z0-9]*-treefmt.toml' ${lib.getExe project.formatter} | head -1)
+      entry=$(grep -A4 'formatter.svg' "$config")
+
+      case "$entry" in
+        *'options = []'*) ;;
+        *)
+          echo "svg is wrapped, so treefmt must be handed no options: $entry" >&2
+          exit 1
+          ;;
+      esac
+
+      wrapper=$(printf '%s' "$entry" | grep -o '/nix/store/[a-z0-9]*-svg-format')
+      for want in --pretty yamlfmt-indent4.yml; do
+        if ! grep -q -- "$want" "$wrapper/bin/svg-format"; then
+          echo "the wrapper dropped $want" >&2
+          exit 1
+        fi
+      done
+
+      touch "$out"
+    '';
+
   # Nothing else keeps the formatter and the checker agreeing on scope.
   projectLayers =
     let

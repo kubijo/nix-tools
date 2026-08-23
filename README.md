@@ -161,6 +161,11 @@ nix-tools.lib.configure {
 `lib.conf` exposes the shipped configs and `lib.defaultExcludes` the default exclude list, so either can be extended
 rather than restated.
 
+`configFile` works for every tool that has one: taplo, yamlfmt, biome (`json`, `javascript`, `typescript`, `css`,
+`html`, `graphql`), prettier, rustfmt, ruff, sqlfluff, svgo and buf. nixfmt, shfmt, mdformat, just, msgcat and oxipng
+take none, and say so at eval rather than dropping the setting. `caddy fmt` is the odd one out: its `--config` names the
+file to format, not a style, so wiring it would format the wrong file.
+
 ## Splicing in your own tools
 
 A repo's homegrown tooling joins the runners rather than running beside them, so it inherits the excludes, the single

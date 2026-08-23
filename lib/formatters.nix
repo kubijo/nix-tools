@@ -21,10 +21,11 @@ let
   rewriteOnDiff = import ./rewrite-on-diff.nix { toolPkgsFor = _: toolPkgs; };
 
   sidecar =
-    name: mkRender: exe:
+    name: mkRender:
+    { exe, options }:
     lib.getExe (rewriteOnDiff {
       inherit system name;
-      render = mkRender exe;
+      render = mkRender exe (lib.escapeShellArgs options);
     });
 
   biome = {
@@ -181,6 +182,7 @@ let
         "--edition"
         "2024"
       ];
+      configFlag = configFlagged "--config-path";
       includes = [ "*.rs" ];
       fence = {
         tags = [ "rust" ];
@@ -218,6 +220,8 @@ let
       };
     };
 
+    # buf's output is canonical, so a buf.yaml changes nothing here; the flag is wired so
+    # every tool that accepts a config path takes one.
     protobuf = {
       package = toolPkgs.buf;
       binary = "buf";
@@ -225,6 +229,7 @@ let
         "format"
         "--write"
       ];
+      configFlag = configFlagged "--config";
       includes = [ "*.proto" ];
     };
 
@@ -239,8 +244,8 @@ let
 
     po = {
       mkCommand = sidecar "po-format" (
-        exe: src: out:
-        "${exe} --no-wrap --output-file=${out} ${src}"
+        exe: opts: src: out:
+        "${exe} --no-wrap ${opts} --output-file=${out} ${src}"
       );
       package = toolPkgs.gettext;
       binary = "msgcat";
@@ -252,11 +257,12 @@ let
 
     svg = {
       mkCommand = sidecar "svg-format" (
-        exe: src: out:
-        "${exe} --quiet --input ${src} --output ${out}"
+        exe: opts: src: out:
+        "${exe} --quiet ${opts} --input ${src} --output ${out}"
       );
       package = onNode "svg" toolPkgs.svgo;
       binary = "svgo";
+      configFlag = configFlagged "--config";
       includes = [ "*.svg" ];
     };
 
@@ -279,8 +285,8 @@ let
       # `caddy fmt` exits 1 on unformatted input; the sidecar's size guard still catches
       # a genuine failure.
       mkCommand = sidecar "caddy-format" (
-        exe: src: out:
-        "${exe} fmt ${src} > ${out} || true"
+        exe: opts: src: out:
+        "${exe} fmt ${opts} ${src} > ${out} || true"
       );
       package = toolPkgs.caddy;
       binary = "caddy";
@@ -328,10 +334,10 @@ let
       binary = "just";
       # One file at a time, hence the loop. `--fmt` is unstable upstream, hence `--unstable`.
       mkCommand =
-        exe:
+        { exe, options }:
         writeShellScript "just-format" ''
           for file in "$@"; do
-            ${exe} --unstable --fmt --justfile "$file"
+            ${exe} ${lib.escapeShellArgs options} --unstable --fmt --justfile "$file"
           done
         '';
       includes = [
@@ -394,9 +400,15 @@ let
     in
     assert lib.assertMsg (opts.configFile == null || def ? configFlag)
       "${name}: this formatter takes no config path — pass the flag through `extraOptions`, or replace the argv with `options`";
-    {
-      command = if def ? mkCommand then def.mkCommand exe else exe;
+    let
       options = argv ++ opts.extraOptions;
+      wrapped = def ? mkCommand;
+    in
+    {
+      command = if wrapped then def.mkCommand { inherit exe options; } else exe;
+      # A wrapper folds the argv in itself, since treefmt would otherwise hand it over
+      # beside the file list, where the loop reads it as one more file.
+      options = if wrapped then [ ] else options;
       includes = if opts.includes != null then opts.includes else def.includes;
       excludes = toTreefmtExcludes opts.exclude;
       priority = if opts.priority != null then opts.priority else 0;

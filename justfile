@@ -20,7 +20,7 @@ check *args:
 
 # `flake check` skips systems it cannot build, so only this reads every one of them.
 outputs:
-    @nix flake show {{ flake_dir }} --all-systems --quiet
+    nix flake show {{ flake_dir }} --all-systems --quiet
 
 # Fail if a fixture is gitignored, since nix reads the git tree and would never see it.
 tracked:

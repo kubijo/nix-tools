@@ -69,6 +69,7 @@ rec {
         validateSteps
         projectLayers
         biomeConfig
+        wrappedArgv
         ;
       agree = harness.mkAgreeCheck golden;
     };
