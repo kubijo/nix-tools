@@ -81,6 +81,9 @@ assert lib.assertMsg (misplaced gateOwned validate == [ ])
   # Only what a flake output needs a derivation for; the rest is runnable, not rebuildable.
   inherit formatter;
 
+  # So a spliced checker can wrap the pinned tool rather than drift from it.
+  inherit toolPkgs;
+
   apps = {
     format = runnable formatter;
     lint = runnable checker;

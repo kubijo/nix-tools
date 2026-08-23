@@ -166,6 +166,11 @@ rather than restated.
 take none, and say so at eval rather than dropping the setting. `caddy fmt` is the odd one out: its `--config` names the
 file to format, not a style, so wiring it would format the wrong file.
 
+A config is staged into the store under its own basename, since ruff picks its parser from that and would read a
+`<hash>-pyproject.toml` as a flat `ruff.toml`. One consequence the library cannot paper over: ruff resolves `src`
+relative to the config's own directory, so a repo passing its own ruff config needs
+`[tool.ruff.lint.isort] known-first-party = [...]` or first-party detection silently stops working.
+
 ## Splicing in your own tools
 
 A repo's homegrown tooling joins the runners rather than running beside them, so it inherits the excludes, the single
@@ -185,6 +190,9 @@ lint.extraCheckers.ruff = {
   batch = true; # one invocation for every match, not one per file
 };
 ```
+
+`project.toolPkgs` is the pinned package set. A spliced checker wrapping a tool the library already carries should take
+it from there — `${project.toolPkgs.biome}/bin/biome` — or it drifts from the tool whose config it holds to account.
 
 Naming a built-in overrides it rather than adding a second. Anything whole-project rather than per-file belongs at the
 outputs level, where the returned values are ordinary attrsets and lists:

@@ -1,0 +1,7 @@
+# Read as a flat `ruff.toml` unless the basename survives into the store, `[project]` throws.
+[project]
+name = "fixture"
+version = "0.1.0"
+
+[tool.ruff]
+line-length = 40

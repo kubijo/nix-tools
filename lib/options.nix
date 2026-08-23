@@ -62,6 +62,45 @@ rec {
         ;
     };
 
+  # Splices destructure too — treefmt takes an unknown `exclude` without complaint.
+  formatterSpecOptions =
+    {
+      command,
+      includes,
+      options ? [ ],
+      exclude ? [ ],
+      priority ? 0,
+    }:
+    {
+      inherit
+        command
+        includes
+        options
+        priority
+        ;
+      excludes = toTreefmtExcludes exclude;
+    };
+
+  checkerSpecOptions =
+    {
+      command,
+      includes,
+      options ? [ ],
+      exclude ? [ ],
+      searchPaths ? [ "." ],
+      batch ? false,
+    }:
+    {
+      inherit
+        command
+        includes
+        options
+        searchPaths
+        batch
+        ;
+      excludes = exclude;
+    };
+
   linkCheckerOptions =
     {
       enable ? true,

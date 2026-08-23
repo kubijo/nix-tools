@@ -5,6 +5,7 @@ let
     toggle
     fileCheckerOptions
     linkCheckerOptions
+    checkerSpecOptions
     defaultExcludeFiles
     defaultExcludeDirs
     ;
@@ -54,17 +55,7 @@ let
       links = toggle linkCheckerOptions links;
     };
 
-  spliced = lib.mapAttrs (
-    name: spec:
-    {
-      inherit name;
-      options = [ ];
-      excludes = [ ];
-      searchPaths = [ "." ];
-      batch = false;
-    }
-    // spec
-  ) extraCheckers;
+  spliced = lib.mapAttrs (name: spec: { inherit name; } // checkerSpecOptions spec) extraCheckers;
 
   checkers = lib.attrValues (import ./checkers.nix { inherit lib toolPkgs args; } // spliced);
 

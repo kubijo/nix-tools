@@ -20,12 +20,12 @@ let
 
   rewriteOnDiff = import ./rewrite-on-diff.nix { toolPkgsFor = _: toolPkgs; };
 
+  # The wrapper reads the tool and its argv at run time, so both stay in `options`.
   sidecar =
     name: mkRender:
-    { exe, options }:
     lib.getExe (rewriteOnDiff {
       inherit system name;
-      render = mkRender exe (lib.escapeShellArgs options);
+      render = mkRender "\"\$tool\"" "\"\${args[@]}\"";
     });
 
   biome = {
@@ -39,15 +39,11 @@ let
     configFlag = configFlagged "--config-path";
   };
 
-  # treefmt hashes a formatter's name, joined options, priority and its executable's size
-  # and mtime (2.5, format/formatter.go:74) — never a config's contents. A config reached
-  # any other way, wrapper scripts included, cannot bust that cache.
-  configFlagged = flag: config: [
-    flag
-    "${config}"
-  ];
+  # treefmt hashes a formatter's name, joined options, priority and its exe's size and mtime
+  # (2.5, format/formatter.go:74) — so a config reached any other way cannot bust that cache.
+  configFlagged = import ./config-path.nix { inherit toolPkgs; };
 
-  # `mkCommand` wraps the resolved exe, for a tool taking one file at a time.
+  # `mkCommand` replaces the exe with a wrapper, for a tool taking one file at a time.
   defaults = {
     nix = {
       package = toolPkgs.nixfmt;
@@ -220,8 +216,7 @@ let
       };
     };
 
-    # buf's output is canonical, so a buf.yaml changes nothing here; the flag is wired so
-    # every tool that accepts a config path takes one.
+    # buf's output is canonical, so a buf.yaml changes nothing here.
     protobuf = {
       package = toolPkgs.buf;
       binary = "buf";
@@ -244,8 +239,8 @@ let
 
     po = {
       mkCommand = sidecar "po-format" (
-        exe: opts: src: out:
-        "${exe} --no-wrap ${opts} --output-file=${out} ${src}"
+        tool: opts: src: out:
+        "${tool} --no-wrap ${opts} --output-file=${out} ${src}"
       );
       package = toolPkgs.gettext;
       binary = "msgcat";
@@ -257,8 +252,8 @@ let
 
     svg = {
       mkCommand = sidecar "svg-format" (
-        exe: opts: src: out:
-        "${exe} --quiet ${opts} --input ${src} --output ${out}"
+        tool: opts: src: out:
+        "${tool} --quiet ${opts} --input ${src} --output ${out}"
       );
       package = onNode "svg" toolPkgs.svgo;
       binary = "svgo";
@@ -285,8 +280,8 @@ let
       # `caddy fmt` exits 1 on unformatted input; the sidecar's size guard still catches
       # a genuine failure.
       mkCommand = sidecar "caddy-format" (
-        exe: opts: src: out:
-        "${exe} fmt ${opts} ${src} > ${out} || true"
+        tool: opts: src: out:
+        "${tool} fmt ${opts} ${src} > ${out} || true"
       );
       package = toolPkgs.caddy;
       binary = "caddy";
@@ -333,13 +328,21 @@ let
       package = toolPkgs.just;
       binary = "just";
       # One file at a time, hence the loop. `--fmt` is unstable upstream, hence `--unstable`.
-      mkCommand =
-        { exe, options }:
-        writeShellScript "just-format" ''
-          for file in "$@"; do
-            ${exe} ${lib.escapeShellArgs options} --unstable --fmt --justfile "$file"
-          done
-        '';
+      mkCommand = writeShellScript "just-format" ''
+        opts=()
+        while [ "$#" -gt 0 ]; do
+          if [ "$1" = "--" ]; then
+            shift
+            break
+          fi
+          opts+=("$1")
+          shift
+        done
+
+        for file in "$@"; do
+          "''${opts[0]}" "''${opts[@]:1}" --unstable --fmt --justfile "$file"
+        done
+      '';
       includes = [
         "justfile"
         "**/justfile"
@@ -405,10 +408,9 @@ let
       wrapped = def ? mkCommand;
     in
     {
-      command = if wrapped then def.mkCommand { inherit exe options; } else exe;
-      # A wrapper folds the argv in itself, since treefmt would otherwise hand it over
-      # beside the file list, where the loop reads it as one more file.
-      options = if wrapped then [ ] else options;
+      command = if wrapped then def.mkCommand else exe;
+      # The tool leads, then its argv, then `--` before the file list.
+      options = if wrapped then [ exe ] ++ options ++ [ "--" ] else options;
       includes = if opts.includes != null then opts.includes else def.includes;
       excludes = toTreefmtExcludes opts.exclude;
       priority = if opts.priority != null then opts.priority else 0;

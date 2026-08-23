@@ -4,6 +4,7 @@ let
   inherit (options)
     toggle
     formatterOptions
+    formatterSpecOptions
     defaultExcludes
     toTreefmtExcludes
     ;
@@ -89,7 +90,7 @@ let
         args
         ;
     }
-    // extraFormatters;
+    // lib.mapAttrs (_: formatterSpecOptions) extraFormatters;
 
   # Subtracts before expansion, so "Cargo.toml" need only be named once.
   excludes = toTreefmtExcludes (

@@ -14,7 +14,21 @@ toolPkgs.writeShellApplication {
     toolPkgs.coreutils
     toolPkgs.diffutils
   ];
+  # `$tool` and `args` arrive on the command line, ended by `--`, so treefmt's cache key sees
+  # them. Baked in, they would be invisible: it hashes options, never the command's contents.
   text = ''
+    opts=()
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "--" ]; then
+        shift
+        break
+      fi
+      opts+=("$1")
+      shift
+    done
+    tool="''${opts[0]}"
+    args=("''${opts[@]:1}")
+
     for src in "$@"; do
       tmp=$(mktemp)
       ${render "\"$src\"" "\"$tmp\""}

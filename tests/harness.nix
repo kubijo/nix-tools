@@ -161,8 +161,8 @@ rec {
     esac
   '';
 
-  # A wrapped formatter has to fold its argv into the wrapper. Left in `options`, treefmt
-  # hands it over beside the file list, where the loop reads it as one more file to format.
+  # A wrapper must read its tool and argv, not carry them: two differing only in an embedded
+  # store path are the same size with the same mtime, which is all treefmt stats.
   wrappedArgv =
     let
       project = configure {
@@ -179,18 +179,28 @@ rec {
       config=$(grep -o '/nix/store/[a-z0-9]*-treefmt.toml' ${lib.getExe project.formatter} | head -1)
       entry=$(grep -A4 'formatter.svg' "$config")
 
+      for want in --pretty yamlfmt-indent4.yml '"--"'; do
+        case "$entry" in
+          *"$want"*) ;;
+          *)
+            echo "treefmt hashes these options, so they must carry $want: $entry" >&2
+            exit 1
+            ;;
+        esac
+      done
+
       case "$entry" in
-        *'options = []'*) ;;
+        *svgo-*) ;;
         *)
-          echo "svg is wrapped, so treefmt must be handed no options: $entry" >&2
+          echo "the tool must be in the options too, or a version bump misses the hash" >&2
           exit 1
           ;;
       esac
 
       wrapper=$(printf '%s' "$entry" | grep -o '/nix/store/[a-z0-9]*-svg-format')
-      for want in --pretty yamlfmt-indent4.yml; do
-        if ! grep -q -- "$want" "$wrapper/bin/svg-format"; then
-          echo "the wrapper dropped $want" >&2
+      for baked in yamlfmt-indent4.yml svgo-; do
+        if grep -q -- "$baked" "$wrapper/bin/svg-format"; then
+          echo "the wrapper baked $baked in, hiding it from the cache key" >&2
           exit 1
         fi
       done

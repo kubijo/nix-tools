@@ -7,10 +7,7 @@
 let
   inherit (toolPkgs) writeShellScript;
 
-  configFlagged = flag: config: [
-    flag
-    "${config}"
-  ];
+  configFlagged = import ./config-path.nix { inherit toolPkgs; };
 
   biomeLint = {
     package = toolPkgs.biome;
