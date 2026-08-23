@@ -8,6 +8,8 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-23
+
 ### Fixed
 
 - **Every tool that accepts a config path now takes one.** rustfmt, svgo and buf were missing theirs, so
