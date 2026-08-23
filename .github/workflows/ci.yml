@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    # Naming `tags` alone would stop matching branches entirely.
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  # A nixpkgs bump reformats every repo downstream; find out on a schedule, not mid-release.
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  # One string for a branch push and its own pull request, so the pair collapses to one run.
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: No fixture is gitignored
+        run: |
+          ignored=$(git ls-files --others --ignored --exclude-standard -- tests)
+          if [ -n "$ignored" ]; then
+            printf 'gitignored files under tests/:\n%s\n' "$ignored" >&2
+            exit 1
+          fi
+
+  check:
+    strategy:
+      fail-fast: false
+      # macOS is not optional here: the wrappers lean on coreutils flags GNU-only elsewhere.
+      matrix:
+        runner: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - run: nix flake check -L --keep-going
+      - run: nix flake show --all-systems
+
+  # Determinate alone would leave upstream nix, which most consumers run, untested.
+  compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - run: nix flake check -L --keep-going
+
+  drift:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - run: nix flake update
+      - run: nix flake check -L --keep-going
+      # `flake check` skips systems it cannot build, so a dropped platform only shows here.
+      - run: nix flake show --all-systems

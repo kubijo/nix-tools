@@ -1,0 +1,5 @@
+msgid ""
+msgstr "Content-Type: text/plain; charset=UTF-8\n"
+
+msgid "a very long source string that msgcat would otherwise fold onto another line entirely"
+msgstr "prelozeny retezec"

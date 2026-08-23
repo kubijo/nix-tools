@@ -1,0 +1,8 @@
+# Differs from conf/yamlfmt.yml in `indent` alone, so any formatting difference can only
+# come from the config reaching yamlfmt.
+formatter:
+  type: basic
+  indent: 4
+  retain_line_breaks: true
+  drop_merge_tag: true
+  eof_newline: true

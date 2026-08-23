@@ -1,0 +1,407 @@
+# The raw treefmt `formatter` attrset, separate so it can be asserted over directly.
+{
+  lib,
+  system,
+  toolPkgs,
+  nodejs,
+  args,
+}:
+let
+  # Both node tools are rebuilt against the one runtime, so enabling both lands one closure.
+  onNode =
+    name: drv:
+    if nodejs != null then
+      drv.override { inherit nodejs; }
+    else
+      throw "the `${name}` formatter runs on node, and there is deliberately no default. Add `nodejs = pkgs.nodejs_24;` to your `nix-tools.lib.configure { ... }` call, beside `format.${name} = true;`, so it uses the node this repo already pins.";
+
+  inherit (toolPkgs) writeShellScript;
+  inherit (import ./options.nix { inherit lib; }) toTreefmtExcludes;
+
+  rewriteOnDiff = import ./rewrite-on-diff.nix { toolPkgsFor = _: toolPkgs; };
+
+  sidecar =
+    name: mkRender: exe:
+    lib.getExe (rewriteOnDiff {
+      inherit system name;
+      render = mkRender exe;
+    });
+
+  biome = {
+    package = toolPkgs.biome;
+    binary = "biome";
+    options = [
+      "format"
+      "--write"
+    ];
+    configFile = ../conf/biome.json;
+    configFlag = configFlagged "--config-path";
+  };
+
+  # treefmt hashes a formatter's name, joined options, priority and its executable's size
+  # and mtime (2.5, format/formatter.go:74) — never a config's contents. A config reached
+  # any other way, wrapper scripts included, cannot bust that cache.
+  configFlagged = flag: config: [
+    flag
+    "${config}"
+  ];
+
+  # `mkCommand` wraps the resolved exe, for a tool taking one file at a time.
+  defaults = {
+    nix = {
+      package = toolPkgs.nixfmt;
+      binary = "nixfmt";
+      includes = [ "*.nix" ];
+      fence.tags = [ "nix" ];
+    };
+
+    shell = {
+      package = toolPkgs.shfmt;
+      binary = "shfmt";
+      options = [
+        "--write"
+        "--simplify"
+        "--binary-next-line"
+        "--indent"
+        "4"
+      ];
+      includes = [
+        "*.sh"
+        "*.bash"
+        "*.envrc"
+        "*.envrc.*"
+      ];
+      fence = {
+        tags = [
+          "bash"
+          "sh"
+          "shell"
+        ];
+        drop = [ "--write" ];
+      };
+    };
+
+    toml = {
+      package = toolPkgs.taplo;
+      binary = "taplo";
+      options = [ "format" ];
+      configFile = ../conf/taplo.toml;
+      configFlag = configFlagged "--config";
+      includes = [ "*.toml" ];
+      fence = {
+        tags = [ "toml" ];
+        extra = _: [ "-" ];
+      };
+    };
+
+    yaml = {
+      package = toolPkgs.yamlfmt;
+      binary = "yamlfmt";
+      configFile = ../conf/yamlfmt.yml;
+      configFlag = configFlagged "-conf";
+      includes = [
+        "*.yaml"
+        "*.yml"
+      ];
+    };
+
+    json = biome // {
+      includes = [
+        "*.json"
+        "*.jsonc"
+      ];
+      # The stdin filename is what tells biome whether comments are legal.
+      fence = {
+        tags = [
+          "json"
+          "jsonc"
+        ];
+        drop = [ "--write" ];
+        extra = tag: [
+          "--stdin-file-path"
+          "fence.${tag}"
+        ];
+      };
+    };
+
+    javascript = biome // {
+      includes = [
+        "*.js"
+        "*.mjs"
+        "*.cjs"
+        "*.jsx"
+      ];
+    };
+
+    typescript = biome // {
+      includes = [
+        "*.ts"
+        "*.mts"
+        "*.cts"
+        "*.tsx"
+      ];
+    };
+
+    css = biome // {
+      includes = [ "*.css" ];
+    };
+
+    html = biome // {
+      includes = [
+        "*.html"
+        "*.htm"
+      ];
+    };
+
+    graphql = biome // {
+      includes = [
+        "*.graphql"
+        "*.gql"
+      ];
+    };
+
+    # biome has no SCSS parser.
+    scss = {
+      package = onNode "scss" toolPkgs.prettier;
+      binary = "prettier";
+      options = [ "--write" ];
+      configFile = ../conf/prettier.json;
+      configFlag = configFlagged "--config";
+      includes = [
+        "*.scss"
+        "*.sass"
+      ];
+    };
+
+    rust = {
+      # nixpkgs' rustfmt drags in a whole toolchain, 1.6 GiB beside the one a repo pins.
+      package = throw "the `rust` formatter needs a toolchain, and there is deliberately no default. Add `format.rust.exe = lib.getExe' <your toolchain> \"rustfmt\";` to your `nix-tools.lib.configure { ... }` call, so it uses the toolchain this repo already pins.";
+      binary = "rustfmt";
+      options = [
+        "--edition"
+        "2024"
+      ];
+      includes = [ "*.rs" ];
+      fence = {
+        tags = [ "rust" ];
+        extra = _: [
+          "--emit"
+          "stdout"
+          "--quiet"
+        ];
+      };
+    };
+
+    python = {
+      package = toolPkgs.ruff;
+      binary = "ruff";
+      options = [
+        "format"
+        "--no-cache"
+      ];
+      configFile = ../conf/ruff.toml;
+      configFlag = configFlagged "--config";
+      includes = [
+        "*.py"
+        "*.pyi"
+      ];
+      fence = {
+        tags = [
+          "python"
+          "py"
+        ];
+        extra = _: [
+          "--stdin-filename"
+          "fence.py"
+          "-"
+        ];
+      };
+    };
+
+    protobuf = {
+      package = toolPkgs.buf;
+      binary = "buf";
+      options = [
+        "format"
+        "--write"
+      ];
+      includes = [ "*.proto" ];
+    };
+
+    # sqlfluff cannot guess a dialect, so this needs a `configFile` naming one.
+    sql = {
+      package = toolPkgs.sqlfluff;
+      binary = "sqlfluff";
+      options = [ "format" ];
+      configFlag = configFlagged "--config";
+      includes = [ "*.sql" ];
+    };
+
+    po = {
+      mkCommand = sidecar "po-format" (
+        exe: src: out:
+        "${exe} --no-wrap --output-file=${out} ${src}"
+      );
+      package = toolPkgs.gettext;
+      binary = "msgcat";
+      includes = [
+        "*.po"
+        "*.pot"
+      ];
+    };
+
+    svg = {
+      mkCommand = sidecar "svg-format" (
+        exe: src: out:
+        "${exe} --quiet --input ${src} --output ${out}"
+      );
+      package = onNode "svg" toolPkgs.svgo;
+      binary = "svgo";
+      includes = [ "*.svg" ];
+    };
+
+    # `--preserve` keeps mtime, so an already-optimised file does not read as changed.
+    png = {
+      package = toolPkgs.oxipng;
+      binary = "oxipng";
+      options = [
+        "--quiet"
+        "--preserve"
+        "--strip"
+        "safe"
+        "--opt"
+        "max"
+      ];
+      includes = [ "*.png" ];
+    };
+
+    caddyfile = {
+      # `caddy fmt` exits 1 on unformatted input; the sidecar's size guard still catches
+      # a genuine failure.
+      mkCommand = sidecar "caddy-format" (
+        exe: src: out:
+        "${exe} fmt ${src} > ${out} || true"
+      );
+      package = toolPkgs.caddy;
+      binary = "caddy";
+      includes = [
+        "Caddyfile"
+        "**/Caddyfile"
+        "*.caddyfile"
+      ];
+    };
+
+    markdown = {
+      package = toolPkgs.mdformat.withPlugins (
+        p:
+        [
+          p.mdformat-gfm
+          p.mdformat-frontmatter
+          p.mdformat-simple-breaks
+        ]
+        ++ lib.optional (fenceTags != [ ]) fencePlugin
+      );
+      binary = "mdformat";
+      # Naming each tag makes mdformat require it, so a plugin that stops loading
+      # is an error rather than fences quietly going unformatted.
+      options = [
+        "--number"
+        "--wrap=120"
+      ]
+      ++ (
+        if fenceTags == [ ] then
+          [ "--no-codeformatters" ]
+        else
+          lib.concatMap (tag: [
+            "--codeformatters"
+            tag
+          ]) fenceTags
+      );
+      includes = [
+        "*.md"
+        "*.markdown"
+      ];
+    };
+
+    justfile = {
+      package = toolPkgs.just;
+      binary = "just";
+      # One file at a time, hence the loop. `--fmt` is unstable upstream, hence `--unstable`.
+      mkCommand =
+        exe:
+        writeShellScript "just-format" ''
+          for file in "$@"; do
+            ${exe} --unstable --fmt --justfile "$file"
+          done
+        '';
+      includes = [
+        "justfile"
+        "**/justfile"
+        "Justfile"
+        "**/Justfile"
+        "*.just"
+        "*.justfile"
+      ];
+    };
+  };
+
+  # Built from the resolved argv, so an injected rustfmt reaches fenced rust too,
+  # and a language switched off takes its tags with it.
+  fenceCommands = lib.foldl' (
+    acc: name:
+    acc
+    // lib.optionalAttrs (args.${name}.enable && defaults.${name} ? fence) (
+      let
+        spec = defaults.${name}.fence;
+        resolved = resolve name args.${name};
+      in
+      lib.genAttrs spec.tags (
+        tag:
+        [ resolved.command ]
+        ++ lib.subtractLists (spec.drop or [ ]) resolved.options
+        ++ (spec.extra or (_: [ ])) tag
+      )
+    )
+  ) { } (lib.attrNames args);
+
+  fenceTags = lib.attrNames fenceCommands;
+
+  fencePlugin = import ./fences.nix {
+    inherit lib toolPkgs;
+    commands = fenceCommands;
+  };
+
+  resolve =
+    name: opts:
+    let
+      def = defaults.${name};
+
+      exe =
+        if opts.exe != null then
+          opts.exe
+        else if opts.package != null then
+          lib.getExe' opts.package def.binary
+        else
+          lib.getExe' def.package def.binary;
+
+      configFile = if opts.configFile != null then opts.configFile else def.configFile or null;
+
+      argv =
+        if opts.options != null then
+          opts.options
+        else
+          (def.options or [ ]) ++ lib.optionals (configFile != null) (def.configFlag configFile);
+    in
+    assert lib.assertMsg (opts.configFile == null || def ? configFlag)
+      "${name}: this formatter takes no config path — pass the flag through `extraOptions`, or replace the argv with `options`";
+    {
+      command = if def ? mkCommand then def.mkCommand exe else exe;
+      options = argv ++ opts.extraOptions;
+      includes = if opts.includes != null then opts.includes else def.includes;
+      excludes = toTreefmtExcludes opts.exclude;
+      priority = if opts.priority != null then opts.priority else 0;
+    };
+
+  enabled = lib.filterAttrs (_: opts: opts.enable) args;
+in
+lib.mapAttrs resolve enabled

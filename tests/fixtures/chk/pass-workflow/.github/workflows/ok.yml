@@ -1,0 +1,19 @@
+name: Example
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Say hello
+        run: printf 'hello\n'
+
+  after:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - run: printf 'done\n'

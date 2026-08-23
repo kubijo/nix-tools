@@ -1,0 +1,16 @@
+extends: default
+
+rules:
+  # yamlfmt emits no `---`, so requiring one is a finding the formatter keeps recreating.
+  document-start: disable
+  comments-indentation: disable
+  line-length:
+    max: 120
+    allow-non-breakable-words: true
+  indentation:
+    spaces: 2
+    indent-sequences: consistent
+  # YAML 1.1 reads a workflow's `on:` key as a boolean.
+  # Left enabled, this rule rejects every workflow file there is.
+  truthy:
+    check-keys: false

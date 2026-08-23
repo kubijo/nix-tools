@@ -1,0 +1,15 @@
+name: Run block
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # actionlint reports SC2086 here only while shellcheck sits on its PATH.
+      # This fixture goes red the moment that dependency stops being declared.
+      - run: |
+          target=$1
+          rm -rf $target

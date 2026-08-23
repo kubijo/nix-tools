@@ -1,0 +1,5 @@
+syntax="proto3";
+package example;
+
+message M{string a=1;
+   int32   b=2;}

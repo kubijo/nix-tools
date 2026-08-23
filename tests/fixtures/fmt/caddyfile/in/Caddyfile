@@ -1,0 +1,4 @@
+example.com {
+respond "ok"
+        encode gzip
+}

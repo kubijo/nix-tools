@@ -1,0 +1,6 @@
+name: example
+values:
+  - one
+  - two
+nested:
+  key: value

@@ -1,0 +1,13 @@
+name: Broken
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  after:
+    # No such job, which actionlint rejects.
+    needs: [nonexistent]
+    runs-on: ubuntu-latest
+    steps:
+      - run: printf 'done\n'

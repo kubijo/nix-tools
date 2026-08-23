@@ -1,0 +1,30 @@
+import '../just/common.just'
+
+# `source_file()`, since `justfile()` would list the root's recipes from inside a `mod`.
+[private]
+default:
+    @just --justfile {{ source_file() }} --list
+
+# Every check this repo has, by name.
+list:
+    @nix eval --raw {{ flake_dir }}#checks.{{ system }} \
+        --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrNames cs)'
+
+# One check, by the name `just test list` prints.
+one name:
+    nix build {{ flake_dir }}#checks.{{ system }}.{{ name }} -L --no-link
+
+# Regenerate every golden from the derivation the checks diff against. Review the diff.
+update:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root={{ flake_dir }}
+    nix build "$root#internal.{{ system }}.golden" -L --out-link "$root/.tmp/golden"
+    for produced in "$root"/.tmp/golden/*/; do
+        name=$(basename "$produced")
+        target="$root/tests/fixtures/fmt/$name/out"
+        rm -rf "$target"
+        cp -r "$produced" "$target"
+        chmod -R u+w "$target"
+        echo "updated: $name"
+    done
