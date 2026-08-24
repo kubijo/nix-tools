@@ -1,7 +1,7 @@
 # nix-tools
 
 `repofmt` (a treefmt wrapper) and `repochk` (a lint runner) as a configurable flake library. One pinned tool set, so
-every repo using it formats identically.
+formatting moves when you bump it and not before.
 
 ## Use
 
@@ -45,12 +45,9 @@ every repo using it formats identically.
 }
 ```
 
-`configure` is the only entrypoint. The primitives behind it stay unexported deliberately — each carries part of a
-guarantee, and reaching one directly is how a repo ends up with a formatter and a checker that disagree about scope, or
-a tool built against a runtime nothing else uses.
-
-`configure` returns only what a flake output needs the derivation for. The checker and the gate come back as `apps`
-instead, so they can be run but not rebuilt into a check that quietly drops what `checks` guarantees.
+`configure` is the only entrypoint; the primitives behind it stay unexported, so a repo cannot end up with a formatter
+and a checker that disagree about scope. A derivation comes back only where a flake output needs one — the checker and
+the gate arrive as `apps`, runnable but not rebuildable into a check that drops what `checks` guarantees.
 
 `apps.validate` is the local gate: formatter, checker, then `validate.steps`. Every step runs and the exit code is the
 worst of them, so one pass reports every problem; `validate.failFast = true` stops at the first. It is the one piece
@@ -58,32 +55,31 @@ that does not null `PATH`, since its steps want the dev shell they were started 
 
 ## repofmt
 
-| Toggle       | Tool     | Globs                          | Default |
-| ------------ | -------- | ------------------------------ | ------- |
-| `nix`        | nixfmt   | `*.nix`                        | on      |
-| `shell`      | shfmt    | `*.sh` `*.bash` `*.envrc`      | on      |
-| `markdown`   | mdformat | `*.md` `*.markdown`            | on      |
-| `toml`       | taplo    | `*.toml`                       | on      |
-| `yaml`       | yamlfmt  | `*.yaml` `*.yml`               | on      |
-| `json`       | biome    | `*.json` `*.jsonc`             | on      |
-| `justfile`   | just     | `justfile` `*.just`            | on      |
-| `rust`       | rustfmt  | `*.rs`                         | off     |
-| `python`     | ruff     | `*.py` `*.pyi`                 | off     |
-| `javascript` | biome    | `*.js` `*.mjs` `*.cjs` `*.jsx` | off     |
-| `typescript` | biome    | `*.ts` `*.mts` `*.cts` `*.tsx` | off     |
-| `css`        | biome    | `*.css`                        | off     |
-| `html`       | biome    | `*.html` `*.htm`               | off     |
-| `graphql`    | biome    | `*.graphql` `*.gql`            | off     |
-| `scss`       | prettier | `*.scss` `*.sass`              | off     |
-| `protobuf`   | buf      | `*.proto`                      | off     |
-| `sql`        | sqlfluff | `*.sql`                        | off     |
-| `po`         | msgcat   | `*.po` `*.pot`                 | off     |
-| `svg`        | svgo     | `*.svg`                        | off     |
-| `png`        | oxipng   | `*.png`                        | off     |
-| `caddyfile`  | caddy    | `Caddyfile` `*.caddyfile`      | off     |
+| Toggle       | Tool         | Globs                          | Default |
+| ------------ | ------------ | ------------------------------ | ------- |
+| `nix`        | [`nixfmt`]   | `*.nix`                        | ✅ on   |
+| `shell`      | [`shfmt`]    | `*.sh` `*.bash` `*.envrc`      | ✅ on   |
+| `markdown`   | [`mdformat`] | `*.md` `*.markdown`            | ✅ on   |
+| `toml`       | [`taplo`]    | `*.toml`                       | ✅ on   |
+| `yaml`       | [`yamlfmt`]  | `*.yaml` `*.yml`               | ✅ on   |
+| `json`       | [`biome`]    | `*.json` `*.jsonc`             | ✅ on   |
+| `justfile`   | [`just`]     | `justfile` `*.just`            | ✅ on   |
+| `rust`       | [`rustfmt`]  | `*.rs`                         | ❌ off  |
+| `python`     | [`ruff`]     | `*.py` `*.pyi`                 | ❌ off  |
+| `javascript` | [`biome`]    | `*.js` `*.mjs` `*.cjs` `*.jsx` | ❌ off  |
+| `typescript` | [`biome`]    | `*.ts` `*.mts` `*.cts` `*.tsx` | ❌ off  |
+| `css`        | [`biome`]    | `*.css`                        | ❌ off  |
+| `html`       | [`biome`]    | `*.html` `*.htm`               | ❌ off  |
+| `graphql`    | [`biome`]    | `*.graphql` `*.gql`            | ❌ off  |
+| `scss`       | [`prettier`] | `*.scss` `*.sass`              | ❌ off  |
+| `protobuf`   | [`buf`]      | `*.proto`                      | ❌ off  |
+| `sql`        | [`sqlfluff`] | `*.sql`                        | ❌ off  |
+| `po`         | [`msgcat`]   | `*.po` `*.pot`                 | ❌ off  |
+| `svg`        | [`svgo`]     | `*.svg`                        | ❌ off  |
+| `png`        | [`oxipng`]   | `*.png`                        | ❌ off  |
+| `caddyfile`  | [`caddy`]    | `Caddyfile` `*.caddyfile`      | ❌ off  |
 
-Language-specific formatters are off by default. `onUnmatched` defaults to `fatal`, so the first unclaimed file type
-fails the run rather than rotting unformatted.
+`onUnmatched` defaults to `fatal`, so the first unclaimed file type fails the run rather than rotting unformatted.
 
 Only enabled entries are evaluated, so an off toggle costs nothing — the defaults close over 455 MiB. `json` and
 `markdown` account for 245 MiB of that through biome and mdformat, and stay on because `fatal` would otherwise fail any
@@ -106,20 +102,20 @@ nix-tools.lib.configure {
 ```
 
 `project.packages` already carries that runtime alongside the tools, so a dev shell built from it cannot end up on a
-second node. That is the reason to take the list rather than name the tools yourself.
+second node.
 
 ## repochk
 
-| Toggle       | Tool             | Globs                                    | Default |
-| ------------ | ---------------- | ---------------------------------------- | ------- |
-| `nix`        | statix + deadnix | `*.nix`                                  | on      |
-| `shell`      | shellcheck       | `*.sh` `*.bash` `.envrc`                 | on      |
-| `yaml`       | yamllint         | `*.yaml` `*.yml`                         | on      |
-| `workflows`  | actionlint       | `.github/workflows` `.forgejo/workflows` | on      |
-| `python`     | ruff check       | `*.py` `*.pyi`                           | off     |
-| `javascript` | biome lint       | `*.js` `*.mjs` `*.cjs` `*.jsx`           | off     |
-| `typescript` | biome lint       | `*.ts` `*.mts` `*.cts` `*.tsx`           | off     |
-| `links`      | lychee           | `*.md` `*.markdown`                      | off     |
+| Toggle       | Tool                     | Globs                                    | Default |
+| ------------ | ------------------------ | ---------------------------------------- | ------- |
+| `nix`        | [`statix`] + [`deadnix`] | `*.nix`                                  | ✅ on   |
+| `shell`      | [`shellcheck`]           | `*.sh` `*.bash` `.envrc`                 | ✅ on   |
+| `yaml`       | [`yamllint`]             | `*.yaml` `*.yml`                         | ✅ on   |
+| `workflows`  | [`actionlint`]           | `.github/workflows` `.forgejo/workflows` | ✅ on   |
+| `python`     | [`ruff check`][`ruff`]   | `*.py` `*.pyi`                           | ❌ off  |
+| `javascript` | [`biome lint`][`biome`]  | `*.js` `*.mjs` `*.cjs` `*.jsx`           | ❌ off  |
+| `typescript` | [`biome lint`][`biome`]  | `*.ts` `*.mts` `*.cts` `*.tsx`           | ❌ off  |
+| `links`      | [`lychee`]               | `*.md` `*.markdown`                      | ❌ off  |
 
 Each shares the tool and config its formatter counterpart uses, so `ruff check` and `ruff format` cannot disagree about
 line length. `links` resolves on-disk targets only — an unreachable host never fails it — and takes patterns matched
@@ -147,11 +143,6 @@ nix-tools.lib.configure {
     yaml = {
       configFile = ./yamlfmt.yml; # replaces the shipped default
       exclude = [ "helm/**" ]; # this language alone
-    };
-    extraFormatters.stylelint = {
-      command = ./stylelint-wrapper;
-      includes = [ "*.scss" ];
-      priority = 1;
     };
   };
   lint.exclude = [ "fixtures/**" ]; # the checker alone
@@ -203,21 +194,38 @@ apps.${system} = project.apps // { serve = { type = "app"; program = "…"; }; }
 devShells.${system}.default = pkgs.mkShellNoCC { packages = project.packages ++ [ pkgs.cargo-deny ]; };
 ```
 
-And a command that only needs to run in the local gate is a `validate.steps` entry, which costs nothing to add.
+And a command that only needs to run in the local gate is a `validate.steps` entry.
 
 ## Two rules that bite
 
-**`nixpkgs-pinned` is not meant to be `follows`-ed.** Identical tool versions across repos is the point; a `follows`
-resolves the tools against your nixpkgs instead. Override per call site with `toolPkgs`.
+**`nixpkgs-pinned` is not meant to be `follows`-ed.** An attribute name is not a stable identity: `nixfmt` meant the
+classic formatter until nixpkgs flipped the alias to the RFC-style rewrite, so a `follows` can restyle every `.nix` file
+without ever erroring. The configs are version-bound too — `conf/biome.json` names biome 2.5.8's schema, and biome
+rejects a key it does not know. Override per call site with `toolPkgs`.
 
 **Configs are passed by store path, in the tool's `options`.** treefmt hashes a formatter's name, joined options,
 priority and its executable's size and mtime — never a config's contents. A config reached any other way, including one
 baked into a wrapper script, cannot invalidate the cache, so editing it becomes a silent no-op.
 
-## Contributing
-
-`just` lists the recipes; `just validate` runs everything CI gates on. Goldens are regenerated with `just test update`
-and the diff is meant to be read.
-
-`just release minor` bumps the last tag, dates the `## [Unreleased]` section, commits it and cuts an annotated tag
-carrying those notes as its message. It stops there — pushing is `git push --follow-tags`.
+[`actionlint`]: https://rhysd.github.io/actionlint/
+[`biome`]: https://biomejs.dev/
+[`buf`]: https://buf.build
+[`caddy`]: https://caddyserver.com
+[`deadnix`]: https://github.com/astro/deadnix
+[`just`]: https://github.com/casey/just
+[`lychee`]: https://github.com/lycheeverse/lychee
+[`mdformat`]: https://mdformat.rtfd.io/
+[`msgcat`]: https://www.gnu.org/software/gettext/manual/html_node/msgcat-Invocation.html
+[`nixfmt`]: https://github.com/NixOS/nixfmt
+[`oxipng`]: https://github.com/oxipng/oxipng
+[`prettier`]: https://prettier.io/
+[`ruff`]: https://github.com/astral-sh/ruff
+[`rustfmt`]: https://github.com/rust-lang/rustfmt
+[`shellcheck`]: https://www.shellcheck.net/
+[`shfmt`]: https://github.com/mvdan/sh
+[`sqlfluff`]: https://www.sqlfluff.com/
+[`statix`]: https://github.com/molybdenumsoftware/statix
+[`svgo`]: https://github.com/svg/svgo
+[`taplo`]: https://taplo.tamasfe.dev
+[`yamlfmt`]: https://github.com/google/yamlfmt
+[`yamllint`]: https://github.com/adrienverge/yamllint
