@@ -121,6 +121,7 @@ let
     workflows = {
       package = toolPkgs.actionlint;
       binary = "actionlint";
+      configFlag = configFlagged "-config-file";
       # fd globs match the file name, so a directory has to be a search root instead.
       searchPaths = [
         ".github/workflows"
@@ -130,6 +131,32 @@ let
         "*.yml"
         "*.yaml"
       ];
+    };
+
+    protobuf = {
+      package = toolPkgs.buf;
+      binary = "buf";
+      options = [ "lint" ];
+      configFlag = configFlagged "--config";
+      includes = [ "*.proto" ];
+      batch = true;
+    };
+
+    sql = {
+      package = toolPkgs.sqlfluff;
+      binary = "sqlfluff";
+      options = [ "lint" ];
+      configFlag = configFlagged "--config";
+      includes = [ "*.sql" ];
+      batch = true;
+      requiresConfig = true;
+    };
+
+    po = {
+      package = toolPkgs.gettext;
+      binary = "msgfmt";
+      options = [ "--output-file=/dev/null" ];
+      includes = [ "*.po" ];
     };
   };
 
@@ -158,6 +185,9 @@ let
     assert lib.assertMsg (
       opts.configFile == null || def ? configFlag
     ) "${name}: this checker takes no config path — pass the flag through `extraOptions`";
+    assert lib.assertMsg (
+      !(def.requiresConfig or false) || configFile != null
+    ) "${name}: this checker requires `configFile`";
     {
       inherit name;
       command = if def ? mkCommand then def.mkCommand exe else exe;
@@ -165,7 +195,7 @@ let
       includes = if opts.includes != null then opts.includes else def.includes;
       excludes = opts.exclude;
       searchPaths = def.searchPaths or [ "." ];
-      inherit (opts) batch;
+      batch = if opts.batch != null then opts.batch else def.batch or false;
     };
 in
 # Keyed by name, so a spliced checker of the same name overrides rather than joining it.

@@ -14,16 +14,21 @@
       inherit (nixpkgs-pinned) lib;
 
       # x86_64-darwin is absent because nixpkgs 26.11 dropped it.
-      systems = [
+      supportedSystems = [
         "x86_64-linux"
         "aarch64-linux"
         "aarch64-darwin"
       ];
-      eachSystem = lib.genAttrs systems;
+      eachSystem = lib.genAttrs supportedSystems;
 
-      toolPkgsFor = system: nixpkgs-pinned.legacyPackages.${system};
+      toolPkgsFor =
+        system:
+        if lib.elem system supportedSystems then
+          nixpkgs-pinned.legacyPackages.${system}
+        else
+          throw "unsupported system `${system}`; nix-tools' pinned tool set supports: ${lib.concatStringsSep ", " supportedSystems}";
 
-      api = import ./lib { inherit lib toolPkgsFor; };
+      api = import ./lib { inherit lib toolPkgsFor supportedSystems; };
 
       # Consumed exactly as a consumer would, so the published entrypoint is the tested one.
       project = eachSystem (
@@ -38,7 +43,7 @@
       tests = eachSystem (
         system:
         import ./tests {
-          inherit lib system;
+          inherit lib system api;
           toolPkgs = toolPkgsFor system;
         }
       );

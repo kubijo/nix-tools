@@ -6,6 +6,7 @@
   mkChecker,
   mkValidate,
   configure,
+  publicLib,
 }:
 let
   # A fixture directory is no git checkout, so treefmt needs a root marker. Deleted before
@@ -15,6 +16,17 @@ let
   formatterFor =
     args:
     mkFormatter (
+      args
+      // {
+        inherit system;
+        treeRootFile = marker;
+        exclude = (args.exclude or [ ]) ++ [ marker ];
+      }
+    );
+
+  checkerFor =
+    args:
+    mkChecker (
       args
       // {
         inherit system;
@@ -81,9 +93,10 @@ rec {
       "checker fixture ${name}: name must begin with pass- or fail-, which is what states its expectation";
     toolPkgs.runCommandLocal "chk-${name}" { } ''
       cp -r ${fixture} work && chmod -R u+w work && cd work
+      touch ${marker}
       export HOME="$TMPDIR"
 
-      if ${lib.getExe (mkChecker ({ inherit system; } // args))}; then
+      if ${lib.getExe (checkerFor args)}; then
         actual=pass
       else
         actual=fail
@@ -102,10 +115,9 @@ rec {
     golden:
     toolPkgs.runCommandLocal "agree" { } ''
       cp -r ${golden} work && chmod -R u+w work && cd work
+      touch ${marker}
       export HOME="$TMPDIR"
-      ${lib.getExe (mkChecker {
-        inherit system;
-      })}
+      ${lib.getExe (checkerFor { })}
       touch "$out"
     '';
 
@@ -205,6 +217,302 @@ rec {
         fi
       done
 
+      touch "$out"
+    '';
+
+  organizeImportsArgv =
+    let
+      project = configure {
+        inherit system;
+        src = ./.;
+        format.javascript = {
+          organizeImports = true;
+          configFile = ./fixtures/chk/pass-biome-batch/biome.json;
+        };
+      };
+    in
+    toolPkgs.runCommandLocal "organize-imports-argv" { } ''
+      config=$(grep -o '/nix/store/[a-z0-9]*-treefmt.toml' ${lib.getExe project.formatter} | head -1)
+      normal=$(grep -A6 '^\[formatter.javascript\]$' "$config")
+      organize=$(grep -A6 '^\[formatter.javascript-organize-imports\]$' "$config")
+
+      normal_config=$(printf '%s' "$normal" | grep -o '/nix/store/[^" ]*/biome.json')
+      organize_config=$(printf '%s' "$organize" | grep -o '/nix/store/[^" ]*/biome.json')
+      if [ -z "$normal_config" ] || [ "$normal_config" != "$organize_config" ]; then
+        echo "both Biome phases must expose the same config path in treefmt argv" >&2
+        exit 1
+      fi
+
+      normal_command=$(printf '%s' "$normal" | sed -n 's/^command = //p')
+      organize_command=$(printf '%s' "$organize" | sed -n 's/^command = //p')
+      if [ "$normal_command" != "$organize_command" ]; then
+        echo "both Biome phases must run the same pinned executable" >&2
+        exit 1
+      fi
+
+      touch "$out"
+    '';
+
+  # Config-bearing checker counterparts must keep the staged path in generated argv.
+  checkerArgv =
+    let
+      checker = checkerFor {
+        workflows.configFile = ./fixtures/chk/pass-actionlint-config/actionlint.yaml;
+        protobuf.configFile = ./fixtures/chk/pass-protobuf/buf.yaml;
+        sql.configFile = ./fixtures/chk/pass-sql/.sqlfluff;
+      };
+    in
+    toolPkgs.runCommandLocal "checker-argv" { } ''
+      script=${lib.getExe checker}
+      for want in actionlint.yaml buf.yaml .sqlfluff; do
+        if ! grep -q -- "$want" "$script"; then
+          echo "checker argv is missing cache-visible config $want" >&2
+          exit 1
+        fi
+      done
+      touch "$out"
+    '';
+
+  # Both exported checks get the same store-backed preparation before running the
+  # configured tools. Neither check is allowed to silently omit the splice.
+  checkPreparation =
+    let
+      prepared = toolPkgs.writeText "prepared-state" "ready\n";
+      needsPrepared = toolPkgs.writeShellScript "needs-prepared" ''
+        test "$(${toolPkgs.coreutils}/bin/cat prepared-state)" = ready
+      '';
+      project = configure {
+        inherit system;
+        src = ./fixtures/check-preparation;
+        exclude = [ "prepared-state" ];
+        format.extraFormatters.prepared = {
+          command = needsPrepared;
+          includes = [ "*.txt" ];
+          cacheInputs = [ prepared ];
+        };
+        lint.extraCheckers.prepared = {
+          command = needsPrepared;
+          includes = [ "*.txt" ];
+        };
+        check.prepare = ''
+          cp ${prepared} prepared-state
+        '';
+      };
+    in
+    toolPkgs.runCommandLocal "check-preparation-contract" { } ''
+      test -e ${project.checks.formatting}
+      test -e ${project.checks.linting}
+      touch "$out"
+    '';
+
+  # Project checkers run once without file triggers, report every failure, and stay in
+  # repochk's aggregate verdict.
+  projectCheckerReporting =
+    let
+      fail =
+        name:
+        toolPkgs.writeShellScript "project-${name}" ''
+          [ "$#" -eq 0 ]
+          echo ${lib.escapeShellArg name} >&2
+          exit 1
+        '';
+      checker = checkerFor {
+        nix = false;
+        shell = false;
+        yaml = false;
+        workflows = false;
+        extraProjectCheckers = {
+          first.command = fail "first-project-failure";
+          second.command = fail "second-project-failure";
+        };
+      };
+    in
+    toolPkgs.runCommandLocal "project-checker-reporting" { } ''
+      mkdir work && cd work
+      touch ${marker}
+      if output=$(${lib.getExe checker} 2>&1); then
+        echo "failing project checks left repochk green" >&2
+        exit 1
+      fi
+      for want in 'FAIL (first): project' first-project-failure \
+        'FAIL (second): project' second-project-failure \
+        '2 project checks, 2 failed'; do
+        case "$output" in
+          *"$want"*) ;;
+          *) printf 'aggregate output missed %s:\n%s\n' "$want" "$output" >&2; exit 1 ;;
+        esac
+      done
+      touch "$out"
+    '';
+
+  rootedChecker =
+    let
+      checker = checkerFor {
+        nix = false;
+        shell = false;
+        yaml = false;
+        workflows = false;
+        extraCheckers.root = {
+          command = toolPkgs.writeShellScript "root-check" ''
+            test "$(${toolPkgs.coreutils}/bin/basename "$1")" = target.txt
+          '';
+          includes = [ "*.txt" ];
+        };
+      };
+    in
+    toolPkgs.runCommandLocal "rooted-checker" { } ''
+      mkdir -p work/nested/deep
+      cd work
+      touch ${marker} target.txt
+      cd nested/deep
+      output=$(${lib.getExe checker})
+      case "$output" in
+        *'checked 1 files'*) ;;
+        *) echo "subdirectory run did not scan the project root: $output" >&2; exit 1 ;;
+      esac
+      touch "$out"
+    '';
+
+  customFormatterCache =
+    let
+      # A source path is the regression: `toString` used to discard its dependency
+      # context before it reached treefmt.toml.
+      config = ./conf/yamlfmt-indent4.yml;
+      lock = toolPkgs.writeText "custom-format.lock" "version=1\n";
+      command = toolPkgs.writeShellScript "custom-format-command" ''
+        test -e ${config}
+        test "$1" = --fix
+        test "$2" = ${config}
+      '';
+      formatter = formatterFor {
+        nix = false;
+        shell = false;
+        markdown = false;
+        toml = false;
+        yaml = false;
+        json = false;
+        justfile = false;
+        extraFormatters.custom = {
+          inherit command;
+          includes = [ "*.txt" ];
+          options = [
+            "--fix"
+            config
+          ];
+          cacheInputs = [
+            config
+            lock
+          ];
+        };
+      };
+      sourceCommandFormatter = formatterFor {
+        nix = false;
+        shell = false;
+        markdown = false;
+        toml = false;
+        yaml = false;
+        json = false;
+        justfile = false;
+        extraFormatters.source-command = {
+          command = ./fixtures/chk/pass-shell/ok.sh;
+          includes = [ "*.txt" ];
+          cacheInputs = [ ];
+        };
+      };
+    in
+    toolPkgs.runCommandLocal "custom-formatter-cache" { } ''
+      mkdir work && cd work
+      touch ${marker} note.txt
+      ${lib.getExe formatter} --no-cache
+
+      treefmt_config=$(grep -o '/nix/store/[a-z0-9]*-treefmt.toml' ${lib.getExe formatter} | head -1)
+      entry=$(grep -A8 '^\[formatter.custom\]$' "$treefmt_config")
+      for visible in custom-format-command yamlfmt-indent4.yml custom-format.lock; do
+        case "$entry" in
+          *"$visible"*) ;;
+          *) echo "custom formatter cache key missed $visible: $entry" >&2; exit 1 ;;
+        esac
+      done
+
+      source_config=$(grep -o '/nix/store/[a-z0-9]*-treefmt.toml' ${lib.getExe sourceCommandFormatter} | head -1)
+      source_entry=$(grep -A8 '^\[formatter.source-command\]$' "$source_config")
+      case "$source_entry" in
+        *ok.sh*) ;;
+        *) echo "custom formatter command lost its source-path context: $source_entry" >&2; exit 1 ;;
+      esac
+      touch "$out"
+    '';
+
+  pinnedPackageAccess =
+    let
+      direct = publicLib.toolPkgsFor system;
+    in
+    toolPkgs.runCommandLocal "pinned-package-access" { } ''
+      test ${direct.biome} = ${toolPkgs.biome}
+      test -x ${lib.getExe direct.buf}
+      touch "$out"
+    '';
+
+  # Every new attrset remains closed: a typo must fail during evaluation.
+  strictSchemas =
+    let
+      schemas = import ../lib/options.nix { inherit lib; };
+      hasExactly =
+        schema: names: lib.attrNames (builtins.functionArgs schema) == lib.sort builtins.lessThan names;
+      rejectsCollision =
+        !(builtins.tryEval (
+          builtins.deepSeq (checkerFor {
+            extraProjectCheckers.nix.command = "false";
+          }) true
+        )).success;
+    in
+    assert rejectsCollision;
+    assert hasExactly schemas.projectCheckerSpecOptions [
+      "command"
+      "exclude"
+      "options"
+    ];
+    assert hasExactly schemas.formatterSpecOptions [
+      "cacheInputs"
+      "command"
+      "exclude"
+      "includes"
+      "options"
+      "priority"
+    ];
+    assert hasExactly schemas.checkOptions [
+      "prepare"
+      "runtimeInputs"
+    ];
+    assert hasExactly schemas.biomeFormatterOptions [
+      "configFile"
+      "enable"
+      "exclude"
+      "exe"
+      "extraOptions"
+      "includes"
+      "options"
+      "organizeImports"
+      "package"
+      "priority"
+    ];
+    toolPkgs.runCommandLocal "strict-schemas" { } ''
+      touch "$out"
+    '';
+
+  unsupportedSystem =
+    let
+      rejected =
+        !(builtins.tryEval (
+          builtins.deepSeq (publicLib.configure {
+            system = "x86_64-darwin";
+            inherit toolPkgs;
+            src = ./.;
+          }) true
+        )).success;
+    in
+    assert rejected;
+    toolPkgs.runCommandLocal "unsupported-system" { } ''
       touch "$out"
     '';
 

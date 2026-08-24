@@ -53,6 +53,8 @@ the gate arrive as `apps`, runnable but not rebuildable into a check that drops 
 worst of them, so one pass reports every problem; `validate.failFast = true` stops at the first. It is the one piece
 that does not null `PATH`, since its steps want the dev shell they were started from.
 
+The pinned set supports `x86_64-linux`, `aarch64-linux` and `aarch64-darwin`; other systems are rejected at evaluation.
+
 ## repofmt
 
 | Toggle       | Tool         | Globs                          | Default |
@@ -78,6 +80,9 @@ that does not null `PATH`, since its steps want the dev shell they were started 
 | `svg`        | [`svgo`]     | `*.svg`                        | ❌ off  |
 | `png`        | [`oxipng`]   | `*.png`                        | ❌ off  |
 | `caddyfile`  | [`caddy`]    | `Caddyfile` `*.caddyfile`      | ❌ off  |
+
+`javascript.organizeImports` and `typescript.organizeImports` opt into a Biome assist phase before formatting, using the
+same pinned executable, config and scope. This mode rejects a wholesale `options` replacement.
 
 `onUnmatched` defaults to `fatal`, so the first unclaimed file type fails the run rather than rotting unformatted.
 
@@ -106,20 +111,23 @@ second node.
 
 ## repochk
 
-| Toggle       | Tool                     | Globs                                    | Default |
-| ------------ | ------------------------ | ---------------------------------------- | ------- |
-| `nix`        | [`statix`] + [`deadnix`] | `*.nix`                                  | ✅ on   |
-| `shell`      | [`shellcheck`]           | `*.sh` `*.bash` `.envrc`                 | ✅ on   |
-| `yaml`       | [`yamllint`]             | `*.yaml` `*.yml`                         | ✅ on   |
-| `workflows`  | [`actionlint`]           | `.github/workflows` `.forgejo/workflows` | ✅ on   |
-| `python`     | [`ruff check`][`ruff`]   | `*.py` `*.pyi`                           | ❌ off  |
-| `javascript` | [`biome lint`][`biome`]  | `*.js` `*.mjs` `*.cjs` `*.jsx`           | ❌ off  |
-| `typescript` | [`biome lint`][`biome`]  | `*.ts` `*.mts` `*.cts` `*.tsx`           | ❌ off  |
-| `links`      | [`lychee`]               | `*.md` `*.markdown`                      | ❌ off  |
+| Toggle       | Tool                          | Globs                                    | Default |
+| ------------ | ----------------------------- | ---------------------------------------- | ------- |
+| `nix`        | [`statix`] + [`deadnix`]      | `*.nix`                                  | ✅ on   |
+| `shell`      | [`shellcheck`]                | `*.sh` `*.bash` `.envrc`                 | ✅ on   |
+| `yaml`       | [`yamllint`]                  | `*.yaml` `*.yml`                         | ✅ on   |
+| `workflows`  | [`actionlint`]                | `.github/workflows` `.forgejo/workflows` | ✅ on   |
+| `python`     | [`ruff check`][`ruff`]        | `*.py` `*.pyi`                           | ❌ off  |
+| `javascript` | [`biome lint`][`biome`]       | `*.js` `*.mjs` `*.cjs` `*.jsx`           | ❌ off  |
+| `typescript` | [`biome lint`][`biome`]       | `*.ts` `*.mts` `*.cts` `*.tsx`           | ❌ off  |
+| `links`      | [`lychee`]                    | `*.md` `*.markdown`                      | ❌ off  |
+| `protobuf`   | [`buf lint`][`buf`]           | `*.proto`                                | ❌ off  |
+| `sql`        | [`sqlfluff lint`][`sqlfluff`] | `*.sql`                                  | ❌ off  |
+| `po`         | [`msgfmt`]                    | `*.po`                                   | ❌ off  |
 
 Each shares the tool and config its formatter counterpart uses, so `ruff check` and `ruff format` cannot disagree about
-line length. `links` resolves on-disk targets only — an unreachable host never fails it — and takes patterns matched
-against the link rather than the file holding it:
+line length. `sql` requires `configFile`, since SQLFluff cannot safely guess a dialect. `links` resolves on-disk targets
+only — an unreachable host never fails it — and takes patterns matched against the link rather than the file holding it:
 
 ```nix
 lint.links = {
@@ -128,10 +136,19 @@ lint.links = {
 };
 ```
 
+An omitted `batch` inherits the built-in default; an explicit bool overrides it. Custom checkers still default to
+`false`.
+
+Like repofmt, repochk searches upward for the top-level `treeRootFile` before scanning, so subdirectory runs cover the
+same repository.
+
 ## Options
 
 Every toggle is a bool or an attrset of that entry's options, and the attrset is destructured strictly, so a misspelled
 key throws rather than being ignored. Excludes come in three narrowing layers:
+
+Formatter toggles accept `enable`, `exclude`, `includes`, `configFile`, `package`, `exe`, `options`, `extraOptions` and
+`priority`; file checkers omit `options` and `priority`, and add `batch`. `links` also takes `ignoreLinks`.
 
 ```nix
 nix-tools.lib.configure {
@@ -153,9 +170,9 @@ nix-tools.lib.configure {
 rather than restated.
 
 `configFile` works for every tool that has one: taplo, yamlfmt, biome (`json`, `javascript`, `typescript`, `css`,
-`html`, `graphql`), prettier, rustfmt, ruff, sqlfluff, svgo and buf. nixfmt, shfmt, mdformat, just, msgcat and oxipng
-take none, and say so at eval rather than dropping the setting. `caddy fmt` is the odd one out: its `--config` names the
-file to format, not a style, so wiring it would format the wrong file.
+`html`, `graphql`), prettier, rustfmt, ruff, SQLFluff, svgo, buf and actionlint. nixfmt, shfmt, mdformat, just, msgcat,
+msgfmt and oxipng take none, and say so at eval rather than dropping the setting. `caddy fmt` is the odd one out: its
+`--config` names the file to format, not a style, so wiring it would format the wrong file.
 
 A config is staged into the store under its own basename, since ruff picks its parser from that and would read a
 `<hash>-pyproject.toml` as a flat `ruff.toml`. One consequence the library cannot paper over: ruff resolves `src`
@@ -171,22 +188,40 @@ pass and the reporting instead of restating all three:
 format.extraFormatters.stylelint = {
   command = ./stylelint-wrapper; # joins treefmt's run, so it shares the cache
   includes = [ "*.scss" ];
+  cacheInputs = [ ./stylelint.config.mjs ./pnpm-lock.yaml ];
   priority = 1; # after the scss formatter
 };
 
 lint.extraCheckers.ruff = {
-  command = "${pkgs.ruff}/bin/ruff"; # PATH is nulled — store path, or `lint.extraRuntimeInputs`
+  command = lib.getExe (nix-tools.lib.toolPkgsFor system).ruff;
   options = [ "check" ];
   includes = [ "*.py" ];
   batch = true; # one invocation for every match, not one per file
 };
 ```
 
-`project.toolPkgs` is the pinned package set. A spliced checker wrapping a tool the library already carries should take
-it from there — `${project.toolPkgs.biome}/bin/biome` — or it drifts from the tool whose config it holds to account.
+`cacheInputs` is required, even when empty. The library makes the custom command, its argv and these config/manifest
+paths visible to treefmt's cache key without passing cache-only paths to the command.
+
+Use `nix-tools.lib.toolPkgsFor system` while constructing splices, rather than a dummy `configure` call or the
+consumer's unrelated nixpkgs.
 
 Naming a built-in overrides it rather than adding a second. Anything whole-project rather than per-file belongs at the
-outputs level, where the returned values are ordinary attrsets and lists:
+project-checker layer and runs once without a trigger glob or synthetic file arguments:
+
+```nix
+lint.extraProjectCheckers.codegen = {
+  command = ./check-generated-bindings;
+  options = [ "--locked" ];
+  exclude = [ "fixtures/**" ];
+};
+```
+
+Project checks join repochk's aggregate report. Composed excludes are available as JSON in `REPOCHK_EXCLUDES_JSON` for
+commands that traverse files themselves.
+
+The returned values remain ordinary attrsets and lists, so unrelated checks and apps can still be added at the output
+level:
 
 ```nix
 checks.${system} = project.checks // { my-integration = pkgs.runCommandLocal "…" { } "…"; };
@@ -195,6 +230,22 @@ devShells.${system}.default = pkgs.mkShellNoCC { packages = project.packages ++ 
 ```
 
 And a command that only needs to run in the local gate is a `validate.steps` entry.
+
+## Exported checks
+
+Both checks copy `src` into a sandbox and run the complete local tool configuration. `check.prepare` can materialize
+store-backed state such as dependency trees after each copy:
+
+```nix
+project = nix-tools.lib.configure {
+  inherit system src;
+  check.prepare = "cp -r ${frontendDeps}/node_modules frontend/node_modules";
+  check.runtimeInputs = [ pkgs.coreutils ];
+};
+```
+
+There is no `localOnly` splice: if required state cannot be prepared hermetically, use the local apps or validate gate
+and do not export `project.checks`.
 
 ## Two rules that bite
 
@@ -216,6 +267,7 @@ baked into a wrapper script, cannot invalidate the cache, so editing it becomes 
 [`lychee`]: https://github.com/lycheeverse/lychee
 [`mdformat`]: https://mdformat.rtfd.io/
 [`msgcat`]: https://www.gnu.org/software/gettext/manual/html_node/msgcat-Invocation.html
+[`msgfmt`]: https://www.gnu.org/software/gettext/manual/html_node/msgfmt-Invocation.html
 [`nixfmt`]: https://github.com/NixOS/nixfmt
 [`oxipng`]: https://github.com/oxipng/oxipng
 [`prettier`]: https://prettier.io/

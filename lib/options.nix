@@ -46,8 +46,8 @@ rec {
       package ? null,
       exe ? null,
       extraOptions ? [ ],
-      # One invocation for every matching path, instead of one per file.
-      batch ? false,
+      # One invocation containing every matching path. null inherits the built-in default.
+      batch ? null,
     }:
     {
       inherit
@@ -67,6 +67,8 @@ rec {
     {
       command,
       includes,
+      # Required even when empty: custom tools must declare every non-file cache input.
+      cacheInputs,
       options ? [ ],
       exclude ? [ ],
       priority ? 0,
@@ -74,6 +76,7 @@ rec {
     {
       inherit
         command
+        cacheInputs
         includes
         options
         priority
@@ -101,6 +104,17 @@ rec {
       excludes = exclude;
     };
 
+  projectCheckerSpecOptions =
+    {
+      command,
+      options ? [ ],
+      exclude ? [ ],
+    }:
+    {
+      inherit command options;
+      excludes = exclude;
+    };
+
   linkCheckerOptions =
     {
       enable ? true,
@@ -110,7 +124,8 @@ rec {
       package ? null,
       exe ? null,
       extraOptions ? [ ],
-      batch ? true,
+      # null inherits the built-in's choice; a bool is an explicit override.
+      batch ? null,
       # Matched against the link target, not the file holding it.
       ignoreLinks ? [ ],
     }:
@@ -125,6 +140,48 @@ rec {
         extraOptions
         batch
         ignoreLinks
+        ;
+    };
+
+  checkOptions =
+    {
+      # Runs after the source copy, once in each exported check derivation.
+      prepare ? "",
+      runtimeInputs ? [ ],
+    }:
+    {
+      inherit prepare runtimeInputs;
+    };
+
+  biomeFormatterOptions =
+    {
+      enable ? true,
+      exclude ? [ ],
+      includes ? null,
+      configFile ? null,
+      package ? null,
+      exe ? null,
+      options ? null,
+      extraOptions ? [ ],
+      priority ? null,
+      organizeImports ? false,
+    }:
+    assert lib.assertMsg (!(options != null && configFile != null))
+      "formatter: `options` replaces the whole argv, so `configFile` would be dropped — pass it inside `options`";
+    assert lib.assertMsg (!(organizeImports && options != null))
+      "biome formatter: `organizeImports` needs the typed `configFile` API so both phases use the same cache-visible config; do not replace `options`";
+    {
+      inherit
+        enable
+        exclude
+        includes
+        configFile
+        package
+        exe
+        options
+        extraOptions
+        priority
+        organizeImports
         ;
     };
 

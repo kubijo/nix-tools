@@ -8,6 +8,24 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+### Added
+
+- `lint.extraProjectCheckers` for one-shot checks without trigger files.
+- Shared `check.prepare` and `check.runtimeInputs` for hermetic check state.
+- Opt-in protobuf, SQL and PO checkers, actionlint `configFile`, and Biome import organization.
+- Direct pinned-tool access through `lib.toolPkgsFor system`.
+- Required custom-formatter `cacheInputs`, made cache-visible with the real command and argv while retaining Nix
+  dependency context.
+
+### Fixed
+
+- Built-in checker batch defaults are inherited unless explicitly overridden.
+- `repochk` now discovers the shared project root when invoked from a subdirectory.
+
+### Changed
+
+- Unsupported systems, including `x86_64-darwin`, are rejected at the public boundary.
+
 ## [0.1.1] - 2026-08-23
 
 ### Fixed

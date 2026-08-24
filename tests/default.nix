@@ -2,6 +2,7 @@
   lib,
   system,
   toolPkgs,
+  api,
 }:
 let
   # Straight from the modules, not through `lib`: these are the internals the public
@@ -13,6 +14,7 @@ let
     mkChecker = import ../lib/checker.nix { inherit lib toolPkgsFor; };
     mkValidate = import ../lib/validate.nix { inherit lib toolPkgsFor; };
     configure = import ../lib/configure.nix { inherit lib toolPkgsFor; };
+    publicLib = api;
   };
 
   fmtFixtures = ./fixtures/fmt;
@@ -70,6 +72,15 @@ rec {
         projectLayers
         biomeConfig
         wrappedArgv
+        organizeImportsArgv
+        checkerArgv
+        checkPreparation
+        pinnedPackageAccess
+        projectCheckerReporting
+        rootedChecker
+        customFormatterCache
+        strictSchemas
+        unsupportedSystem
         ;
       agree = harness.mkAgreeCheck golden;
     };

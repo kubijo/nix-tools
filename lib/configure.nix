@@ -1,6 +1,11 @@
 # The whole consumer surface: every guarantee is enforced here, with no second way in.
-{ lib, toolPkgsFor }:
+{
+  lib,
+  toolPkgsFor,
+  supportedSystems ? null,
+}:
 let
+  inherit (import ./options.nix { inherit lib; }) checkOptions;
   mkFormatter = import ./formatter.nix { inherit lib toolPkgsFor; };
   mkChecker = import ./checker.nix { inherit lib toolPkgsFor; };
   mkChecks = import ./checks.nix { inherit lib toolPkgsFor; };
@@ -13,6 +18,7 @@ let
     "unexclude"
     "excludeDefaults"
     "nodejs"
+    "treeRootFile"
   ];
 
   gateOwned = projectWide ++ [
@@ -27,6 +33,8 @@ in
   src,
   # Required by any enabled tool that runs on it.
   nodejs ? null,
+  # Both runners discover this marker upward, so subdirectory invocations share one root.
+  treeRootFile ? "flake.nix",
   # Both tools. `format.exclude` and `lint.exclude` narrow to one, a language's to itself.
   exclude ? [ ],
   unexclude ? [ ],
@@ -35,14 +43,18 @@ in
   format ? { },
   lint ? { },
   validate ? { },
+  # Shared, hermetic preparation for both exported check derivations.
+  check ? { },
 }:
 let
+  checkArgs = checkOptions check;
   common = {
     inherit
       system
       toolPkgs
       unexclude
       excludeDefaults
+      treeRootFile
       ;
   };
 
@@ -69,6 +81,8 @@ let
     program = lib.getExe drv;
   };
 in
+assert lib.assertMsg (supportedSystems == null || lib.elem system supportedSystems)
+  "unsupported system `${system}`; nix-tools' pinned tool set supports: ${lib.concatStringsSep ", " supportedSystems}";
 assert lib.assertMsg (
   misplaced projectWide format == [ ]
 ) "these belong to the repo, not to `format`: ${toString (misplaced projectWide format)}";
@@ -98,6 +112,7 @@ assert lib.assertMsg (misplaced gateOwned validate == [ ])
       formatter
       checker
       ;
+    inherit (checkArgs) prepare runtimeInputs;
   };
 
   # Runtime included, so a shell built from this cannot carry a second node.

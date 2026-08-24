@@ -413,9 +413,41 @@ let
       options = if wrapped then [ exe ] ++ options ++ [ "--" ] else options;
       includes = if opts.includes != null then opts.includes else def.includes;
       excludes = toTreefmtExcludes opts.exclude;
-      priority = if opts.priority != null then opts.priority else 0;
+      priority = if opts.priority != null then opts.priority else def.priority or 0;
     };
 
   enabled = lib.filterAttrs (_: opts: opts.enable) args;
+
+  # A separate lower-priority treefmt phase: the normal Biome formatter tidies the
+  # imports after the assist moves them. Both phases resolve the same package and config.
+  organizeImports =
+    name: opts:
+    let
+      def = defaults.${name};
+      normal = resolve name opts;
+      exe =
+        if opts.exe != null then
+          opts.exe
+        else if opts.package != null then
+          lib.getExe' opts.package def.binary
+        else
+          lib.getExe' def.package def.binary;
+      configFile = if opts.configFile != null then opts.configFile else def.configFile or null;
+    in
+    lib.nameValuePair "${name}-organize-imports" {
+      command = exe;
+      options = [
+        "check"
+        "--write"
+        "--only=assist/source/organizeImports"
+      ]
+      ++ lib.optionals (configFile != null) (def.configFlag configFile);
+      inherit (normal) includes excludes;
+      priority = normal.priority - 1;
+    };
+
+  importOrganizers = lib.mapAttrs' organizeImports (
+    lib.filterAttrs (_: opts: opts.enable && (opts.organizeImports or false)) args
+  );
 in
-lib.mapAttrs resolve enabled
+lib.mapAttrs resolve enabled // importOrganizers

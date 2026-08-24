@@ -4,6 +4,7 @@ let
   inherit (options)
     toggle
     formatterOptions
+    biomeFormatterOptions
     formatterSpecOptions
     defaultExcludes
     toTreefmtExcludes
@@ -54,31 +55,86 @@ in
   caddyfile ? false,
 }:
 let
-  args = lib.mapAttrs (_: toggle formatterOptions) {
-    inherit
-      nix
-      shell
-      markdown
-      toml
-      yaml
-      json
-      justfile
-      rust
-      python
-      javascript
-      typescript
-      css
-      html
-      graphql
-      scss
-      protobuf
-      sql
-      po
-      svg
-      png
-      caddyfile
-      ;
-  };
+  # treefmt does not hash a command's store path, only its size and mtime. Keep this
+  # wrapper constant and put the real command plus every declared input in `options`.
+  customFormatter = toolPkgs.writeShellScript "custom-formatter" ''
+    tool=$1
+    option_count=$2
+    shift 2
+
+    tool_options=()
+    while [ "$option_count" -gt 0 ]; do
+      tool_options+=("$1")
+      shift
+      option_count=$((option_count - 1))
+    done
+
+    cache_count=$1
+    shift
+    while [ "$cache_count" -gt 0 ]; do
+      shift
+      cache_count=$((cache_count - 1))
+    done
+
+    exec "$tool" "''${tool_options[@]}" "$@"
+  '';
+
+  resolveCustom =
+    spec:
+    let
+      resolved = formatterSpecOptions spec;
+      contextual =
+        label: input:
+        let
+          # Interpolation copies source paths and retains the context that `toString` drops.
+          value = "${input}";
+        in
+        assert lib.assertMsg (
+          builtins.getContext value != { }
+        ) "extra formatter: ${label} must be a Nix path or derivation output";
+        value;
+      command = contextual "`command`" resolved.command;
+      toolOptions = map (option: if lib.isString option then option else "${option}") resolved.options;
+    in
+    removeAttrs resolved [ "cacheInputs" ]
+    // {
+      command = customFormatter;
+      options = [
+        command
+        (toString (builtins.length toolOptions))
+      ]
+      ++ toolOptions
+      ++ [ (toString (builtins.length resolved.cacheInputs)) ]
+      ++ map (contextual "`cacheInputs` entries") resolved.cacheInputs;
+    };
+
+  args =
+    lib.mapAttrs (_: toggle formatterOptions) {
+      inherit
+        nix
+        shell
+        markdown
+        toml
+        yaml
+        json
+        justfile
+        rust
+        python
+        css
+        html
+        graphql
+        scss
+        protobuf
+        sql
+        po
+        svg
+        png
+        caddyfile
+        ;
+    }
+    // lib.mapAttrs (_: toggle biomeFormatterOptions) {
+      inherit javascript typescript;
+    };
 
   formatters =
     import ./formatters.nix {
@@ -90,7 +146,7 @@ let
         args
         ;
     }
-    // lib.mapAttrs (_: formatterSpecOptions) extraFormatters;
+    // lib.mapAttrs (_: resolveCustom) extraFormatters;
 
   # Subtracts before expansion, so "Cargo.toml" need only be named once.
   excludes = toTreefmtExcludes (
