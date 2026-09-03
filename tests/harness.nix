@@ -44,6 +44,7 @@ let
     protobuf = "buf";
     python = "ruff";
     sql = "sqlfluff";
+    xml = "libxml2";
   };
 
   workCopy = src: ''
@@ -81,6 +82,27 @@ rec {
     toolPkgs.runCommandLocal "fmt-stable-${name}" { } ''
       ${workCopy "${fixture}/out"}
       ${lib.getExe (formatterFor args)} --ci
+      touch "$out"
+    '';
+
+  xmlFailureSafety =
+    let
+      formatter = formatterFor { xml = true; };
+    in
+    toolPkgs.runCommandLocal "fmt-fail-xml" { } ''
+      mkdir work
+      cp ${./fixtures/fmt-fail/xml/malformed.xml} work/malformed.xml
+      chmod u+w work/malformed.xml
+      cp work/malformed.xml original.xml
+      cd work
+      touch ${marker}
+      export HOME="$TMPDIR"
+
+      if ${lib.getExe formatter} --no-cache; then
+        echo "malformed XML unexpectedly formatted successfully" >&2
+        exit 1
+      fi
+      ${toolPkgs.diffutils}/bin/cmp malformed.xml ../original.xml
       touch "$out"
     '';
 

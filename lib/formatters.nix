@@ -16,9 +16,18 @@ let
       throw "the `${name}` formatter runs on node, and there is deliberately no default. Add `nodejs = pkgs.nodejs_24;` to your `nix-tools.lib.configure { ... }` call, beside `format.${name} = true;`, so it uses the node this repo already pins.";
 
   inherit (toolPkgs) writeShellScript;
-  inherit (import ./options.nix { inherit lib; }) toTreefmtExcludes;
+  inherit (import ./options.nix { inherit lib; }) toTreefmtExcludes xmlIncludes;
 
   rewriteOnDiff = import ./rewrite-on-diff.nix { toolPkgsFor = _: toolPkgs; };
+
+  xmlFormat = toolPkgs.writeShellApplication {
+    name = "xml-format";
+    runtimeInputs = [
+      toolPkgs.coreutils
+      toolPkgs.diffutils
+    ];
+    text = builtins.readFile ./xml-format.sh;
+  };
 
   # The wrapper reads the tool and its argv at run time, so both stay in `options`.
   sidecar =
@@ -248,6 +257,18 @@ let
         "*.po"
         "*.pot"
       ];
+    };
+
+    xml = {
+      mkCommand = lib.getExe xmlFormat;
+      package = toolPkgs.libxml2;
+      binary = "xmllint";
+      options = [
+        "--nonet"
+        "--strict-namespace"
+        "--format"
+      ];
+      includes = xmlIncludes;
     };
 
     svg = {

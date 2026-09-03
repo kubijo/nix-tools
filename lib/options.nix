@@ -193,6 +193,12 @@ rec {
   ];
   toTreefmtExcludes = lib.concatMap (p: if lib.hasInfix "/" p then [ p ] else anywhere p);
 
+  # A shared default keeps formatter and checker recognition aligned.
+  xmlIncludes = [
+    "*.xml"
+    "*.gpx"
+  ];
+
   # Skipped wherever they occur, not only at the root.
   defaultExcludeDirs = [
     ".git"

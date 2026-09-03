@@ -6,6 +6,7 @@
 }:
 let
   inherit (toolPkgs) writeShellScript;
+  inherit (import ./options.nix { inherit lib; }) xmlIncludes;
 
   configFlagged = import ./config-path.nix { inherit toolPkgs; };
 
@@ -157,6 +158,18 @@ let
       binary = "msgfmt";
       options = [ "--output-file=/dev/null" ];
       includes = [ "*.po" ];
+    };
+
+    xml = {
+      package = toolPkgs.libxml2;
+      binary = "xmllint";
+      options = [
+        "--nonet"
+        "--strict-namespace"
+        "--noout"
+      ];
+      includes = xmlIncludes;
+      batch = true;
     };
   };
 

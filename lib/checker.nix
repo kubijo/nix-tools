@@ -43,6 +43,7 @@ in
   protobuf ? false,
   sql ? false,
   po ? false,
+  xml ? false,
 }:
 let
   args =
@@ -58,6 +59,7 @@ let
         protobuf
         sql
         po
+        xml
         ;
     }
     // {

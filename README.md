@@ -25,8 +25,12 @@ formatting moves when you bump it and not before.
         format = {
           rust.exe = lib.getExe' toolchain "rustfmt";
           javascript = true;
+          xml = true;
         };
-        lint.python = true;
+        lint = {
+          python = true;
+          xml = true;
+        };
         validate.steps = [
           "cargo clippy --all-targets -- -D warnings"
           {
@@ -77,6 +81,7 @@ The pinned set supports `x86_64-linux`, `aarch64-linux` and `aarch64-darwin`; ot
 | `protobuf`   | [`buf`]      | `*.proto`                      | ❌ off  |
 | `sql`        | [`sqlfluff`] | `*.sql`                        | ❌ off  |
 | `po`         | [`msgcat`]   | `*.po` `*.pot`                 | ❌ off  |
+| `xml`        | [`xmllint`]  | `*.xml` `*.gpx`                | ❌ off  |
 | `svg`        | [`svgo`]     | `*.svg`                        | ❌ off  |
 | `png`        | [`oxipng`]   | `*.png`                        | ❌ off  |
 | `caddyfile`  | [`caddy`]    | `Caddyfile` `*.caddyfile`      | ❌ off  |
@@ -124,6 +129,7 @@ second node.
 | `protobuf`   | [`buf lint`][`buf`]           | `*.proto`                                | ❌ off  |
 | `sql`        | [`sqlfluff lint`][`sqlfluff`] | `*.sql`                                  | ❌ off  |
 | `po`         | [`msgfmt`]                    | `*.po`                                   | ❌ off  |
+| `xml`        | [`xmllint`]                   | `*.xml` `*.gpx`                          | ❌ off  |
 
 Each shares the tool and config its formatter counterpart uses, so `ruff check` and `ruff format` cannot disagree about
 line length. `sql` requires `configFile`, since SQLFluff cannot safely guess a dialect. `links` resolves on-disk targets
@@ -166,13 +172,22 @@ nix-tools.lib.configure {
 }
 ```
 
+XML and GPX use the same opt-in scope in both runners:
+
+```nix
+format.xml = true;
+lint.xml = true;
+```
+
+The checker verifies well-formed XML and namespace usage; it does not perform DTD, XML Schema or GPX schema validation.
+
 `lib.conf` exposes the shipped configs and `lib.defaultExcludes` the default exclude list, so either can be extended
 rather than restated.
 
 `configFile` works for every tool that has one: taplo, yamlfmt, biome (`json`, `javascript`, `typescript`, `css`,
 `html`, `graphql`), prettier, rustfmt, ruff, SQLFluff, svgo, buf and actionlint. nixfmt, shfmt, mdformat, just, msgcat,
-msgfmt and oxipng take none, and say so at eval rather than dropping the setting. `caddy fmt` is the odd one out: its
-`--config` names the file to format, not a style, so wiring it would format the wrong file.
+msgfmt, xmllint and oxipng take none, and say so at eval rather than dropping the setting. `caddy fmt` is the odd one
+out: its `--config` names the file to format, not a style, so wiring it would format the wrong file.
 
 A config is staged into the store under its own basename, since ruff picks its parser from that and would read a
 `<hash>-pyproject.toml` as a flat `ruff.toml`. One consequence the library cannot paper over: ruff resolves `src`
@@ -279,5 +294,6 @@ baked into a wrapper script, cannot invalidate the cache, so editing it becomes 
 [`statix`]: https://github.com/molybdenumsoftware/statix
 [`svgo`]: https://github.com/svg/svgo
 [`taplo`]: https://taplo.tamasfe.dev
+[`xmllint`]: https://gnome.pages.gitlab.gnome.org/libxml2/xmllint.html
 [`yamlfmt`]: https://github.com/google/yamlfmt
 [`yamllint`]: https://github.com/adrienverge/yamllint

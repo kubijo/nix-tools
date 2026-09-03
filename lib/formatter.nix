@@ -50,6 +50,7 @@ in
   protobuf ? false,
   sql ? false,
   po ? false,
+  xml ? false,
   svg ? false,
   png ? false,
   caddyfile ? false,
@@ -127,6 +128,7 @@ let
         protobuf
         sql
         po
+        xml
         svg
         png
         caddyfile

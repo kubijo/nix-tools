@@ -8,6 +8,11 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in XML and GPX formatting and well-formedness checking through `xmllint`, with deterministic indentation and
+  failure-safe in-place writes.
+
 ## [0.2.0] - 2026-08-24
 
 ### Added

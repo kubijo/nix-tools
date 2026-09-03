@@ -83,6 +83,7 @@ rec {
         unsupportedSystem
         ;
       agree = harness.mkAgreeCheck golden;
+      fmt-fail-xml = harness.xmlFailureSafety;
     };
 
   golden = toolPkgs.runCommandLocal "golden" { } (
