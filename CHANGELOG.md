@@ -8,6 +8,8 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-07
+
 ### Added
 
 - Opt-in, named `lint.ast-grep` profiles with read-only checks, explicit codemod apps, root-relative configuration,
