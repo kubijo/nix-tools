@@ -153,6 +153,82 @@ rec {
       inherit prepare runtimeInputs;
     };
 
+  gritArgsOptions =
+    {
+      common ? [ ],
+      check ? [ ],
+      apply ? [ ],
+    }:
+    {
+      inherit
+        common
+        check
+        apply
+        ;
+    };
+
+  gritOptions =
+    {
+      enable ? true,
+      package ? null,
+      profiles ? { },
+    }:
+    {
+      inherit
+        enable
+        package
+        profiles
+        ;
+    };
+
+  gritProfileOptions =
+    {
+      patterns ? null,
+      paths ? [ ],
+      exclude ? [ ],
+      gritArgs ? { },
+      gate ? true,
+    }:
+    {
+      inherit
+        patterns
+        paths
+        exclude
+        gate
+        ;
+      gritArgs = gritArgsOptions gritArgs;
+    };
+
+  astGrepProfileOptions =
+    {
+      configFile ? null,
+      paths ? [ ],
+      exclude ? [ ],
+      gate ? true,
+    }:
+    {
+      inherit
+        configFile
+        paths
+        exclude
+        gate
+        ;
+    };
+
+  astGrepOptions =
+    {
+      enable ? true,
+      package ? null,
+      profiles ? { },
+    }:
+    {
+      inherit
+        enable
+        package
+        profiles
+        ;
+    };
+
   biomeFormatterOptions =
     {
       enable ? true,

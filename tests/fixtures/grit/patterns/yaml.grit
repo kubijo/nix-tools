@@ -1,0 +1,3 @@
+language yaml
+
+`legacy: $value` => `modern: $value`

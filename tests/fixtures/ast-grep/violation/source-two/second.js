@@ -1,0 +1,1 @@
+const second = legacyCall(value);

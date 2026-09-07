@@ -6,10 +6,19 @@
     # is the whole point — a `follows` resolves the tools against their nixpkgs instead.
     # Override per call site with `toolPkgs`.
     nixpkgs-pinned.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+
+    nix-gritql = {
+      url = "github:kubijo/nix-gritql/v0.4.1";
+      inputs.nixpkgs-pinned.follows = "nixpkgs-pinned";
+    };
   };
 
   outputs =
-    { self, nixpkgs-pinned }:
+    {
+      self,
+      nix-gritql,
+      nixpkgs-pinned,
+    }:
     let
       inherit (nixpkgs-pinned) lib;
 
@@ -28,7 +37,14 @@
         else
           throw "unsupported system `${system}`; nix-tools' pinned tool set supports: ${lib.concatStringsSep ", " supportedSystems}";
 
-      api = import ./lib { inherit lib toolPkgsFor supportedSystems; };
+      api = import ./lib {
+        inherit
+          lib
+          nix-gritql
+          supportedSystems
+          toolPkgsFor
+          ;
+      };
 
       # Consumed exactly as a consumer would, so the published entrypoint is the tested one.
       project = eachSystem (
@@ -43,7 +59,12 @@
       tests = eachSystem (
         system:
         import ./tests {
-          inherit lib system api;
+          inherit
+            api
+            lib
+            nix-gritql
+            system
+            ;
           toolPkgs = toolPkgsFor system;
         }
       );
@@ -65,12 +86,6 @@
         default = (toolPkgsFor system).mkShellNoCC {
           packages = project.${system}.packages ++ [ (toolPkgsFor system).just ];
         };
-      });
-
-      # This repo's own tooling, named so nobody mistakes it for the library's surface.
-      # A consumer gets everything through `lib.configure`.
-      internal = eachSystem (system: {
-        inherit (tests.${system}) golden;
       });
     };
 }

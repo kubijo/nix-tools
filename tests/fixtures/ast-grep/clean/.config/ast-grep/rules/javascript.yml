@@ -1,0 +1,10 @@
+id: rename-legacy-javascript-call
+language: javascript
+severity: error
+message: Use modernCall instead of legacyCall.
+files:
+  - "source one/*.js"
+  - "source-two/*.js"
+rule:
+  pattern: legacyCall($ARG)
+fix: modernCall($ARG)

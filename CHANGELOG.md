@@ -8,6 +8,17 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in, named `lint.ast-grep` profiles with read-only checks, explicit codemod apps, root-relative configuration,
+  composed exclusions, independently gated profiles, and package overrides.
+- Opt-in, named `lint.grit` profiles backed by nix-gritql, with read-only structural checks, explicit codemod apps,
+  composed exclusions, independently gated profiles, and package overrides.
+
+### Changed
+
+- Removed the repository-only golden fixture generator from the root flake's public outputs.
+
 ## [0.3.0] - 2026-09-03
 
 ### Added

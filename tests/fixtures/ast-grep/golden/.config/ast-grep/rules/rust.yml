@@ -1,0 +1,9 @@
+id: rename-legacy-rust-call
+language: rust
+severity: error
+message: Use modern_call instead of legacy_call.
+files:
+  - "rust code/*.rs"
+rule:
+  pattern: legacy_call($ARG)
+fix: modern_call($ARG)

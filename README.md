@@ -148,18 +148,72 @@ An omitted `batch` inherits the built-in default; an explicit bool overrides it.
 Like repofmt, repochk searches upward for the top-level `treeRootFile` before scanning, so subdirectory runs cover the
 same repository.
 
+## Grit
+
+Structural checks and their explicit codemod counterparts use named `lint.grit` profiles. A pattern source is a `.grit`
+or Markdown file, or a directory containing either; target paths and exclusions are relative to the consumer source
+root:
+
+```nix
+lint.grit = {
+  profiles = {
+    policy = {
+      patterns = ./.config/grit/policy;
+      paths = [ "crates" ];
+    };
+    rename-widget-api = {
+      patterns = ./.config/grit/codemods/rename-widget-api;
+      paths = [ "widgets" ];
+      gate = false;
+    };
+  };
+};
+```
+
+Every profile requires `patterns` and at least one target in `paths`, and exports `grit-NAME-check` and
+`grit-NAME-apply` apps. Profiles are gated by default and add a `checks.grit-NAME` entry; `gate = false` keeps an
+explicit codemod out of `flake check`. Only an apply app rewrites files, and apply apps never join repochk or the
+default `format`, `lint`, and `validate` apps. Repository-wide and lint exclusions compose with each profile's
+exclusions. A top-level `package` replaces the Grit executable for every profile, while `toolPkgs` supplies its runner
+dependencies. `gritArgs.common` accepts `--log-level`; `.check` and `.apply` additionally accept `--verbose`. Grit apps
+accept no runtime arguments, preserving the profile's declared behavior and scope.
+
+## ast-grep
+
+ast-grep uses the same named-profile model. `configFile` is relative to the consumer source root; paths referenced by
+the config, including `ruleDirs`, remain relative to the config file itself:
+
+```nix
+lint.ast-grep = {
+  profiles.policy = {
+    configFile = ".config/ast-grep/sgconfig.yml";
+    paths = [ "crates" "web app" ];
+  };
+};
+```
+
+The `policy` profile exports the read-only `checks.ast-grep-policy` check and the explicit `apps.ast-grep-policy-check`
+and `apps.ast-grep-policy-apply` apps. The apps accept no runtime arguments: their configuration and scope come only
+from the profile. Check mode forces findings to error severity; only the apply app supplies `--update-all`. Profiles are
+gated by default; `gate = false` retains both apps without adding a check. Neither app joins repochk or the default
+`format`, `lint`, and `validate` apps, so `flake check` scans each gated profile once and no ordinary gate can apply
+rewrites. Repository-wide and lint exclusions compose with each profile's exclusions. A top-level `package` replaces the
+shared ast-grep executable; otherwise the selected `toolPkgs.ast-grep` is used.
+
 ## Options
 
 Every toggle is a bool or an attrset of that entry's options, and the attrset is destructured strictly, so a misspelled
 key throws rather than being ignored. Excludes come in three narrowing layers:
 
 Formatter toggles accept `enable`, `exclude`, `includes`, `configFile`, `package`, `exe`, `options`, `extraOptions` and
-`priority`; file checkers omit `options` and `priority`, and add `batch`. `links` also takes `ignoreLinks`.
+`priority`; file checkers omit `options` and `priority`, and add `batch`. `links` also takes `ignoreLinks`. `grit` and
+`ast-grep` each take `package` plus a strict `profiles` attrset. Grit profiles contain `patterns`, `paths`, `exclude`,
+`gritArgs`, and `gate`; ast-grep profiles contain `configFile`, `paths`, `exclude`, and `gate`.
 
 ```nix
 nix-tools.lib.configure {
   inherit system src;
-  exclude = [ "vendor/**" ]; # both tools
+  exclude = [ "vendor/**" ]; # every formatter, checker, and structural profile
   unexclude = [ "Cargo.toml" ]; # drop one of the defaults
   format = {
     exclude = [ "generated/**" ]; # the formatter alone
@@ -168,7 +222,7 @@ nix-tools.lib.configure {
       exclude = [ "helm/**" ]; # this language alone
     };
   };
-  lint.exclude = [ "fixtures/**" ]; # the checker alone
+  lint.exclude = [ "fixtures/**" ]; # the checker and structural profiles
 }
 ```
 
@@ -248,8 +302,8 @@ And a command that only needs to run in the local gate is a `validate.steps` ent
 
 ## Exported checks
 
-Both checks copy `src` into a sandbox and run the complete local tool configuration. `check.prepare` can materialize
-store-backed state such as dependency trees after each copy:
+The formatting and linting checks copy `src` into a sandbox and run the complete local file-tool configuration.
+`check.prepare` can materialize store-backed state such as dependency trees after each copy:
 
 ```nix
 project = nix-tools.lib.configure {
@@ -259,6 +313,9 @@ project = nix-tools.lib.configure {
 };
 ```
 
+Structural profile checks run directly against immutable source inputs and do not inherit `check.prepare` or
+`check.runtimeInputs`; their check derivations therefore behave like their explicit check apps.
+
 There is no `localOnly` splice: if required state cannot be prepared hermetically, use the local apps or validate gate
 and do not export `project.checks`.
 
@@ -266,7 +323,7 @@ and do not export `project.checks`.
 
 **`nixpkgs-pinned` is not meant to be `follows`-ed.** An attribute name is not a stable identity: `nixfmt` meant the
 classic formatter until nixpkgs flipped the alias to the RFC-style rewrite, so a `follows` can restyle every `.nix` file
-without ever erroring. The configs are version-bound too — `conf/biome.json` names biome 2.5.8's schema, and biome
+without ever erroring. The configs are version-bound too — `conf/biome.json` names biome 2.5.11's schema, and biome
 rejects a key it does not know. Override per call site with `toolPkgs`.
 
 **Configs are passed by store path, in the tool's `options`.** treefmt hashes a formatter's name, joined options,

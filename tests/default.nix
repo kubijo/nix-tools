@@ -1,5 +1,6 @@
 {
   lib,
+  nix-gritql,
   system,
   toolPkgs,
   api,
@@ -13,7 +14,9 @@ let
     mkFormatter = import ../lib/formatter.nix { inherit lib toolPkgsFor; };
     mkChecker = import ../lib/checker.nix { inherit lib toolPkgsFor; };
     mkValidate = import ../lib/validate.nix { inherit lib toolPkgsFor; };
-    configure = import ../lib/configure.nix { inherit lib toolPkgsFor; };
+    configure = import ../lib/configure.nix {
+      inherit lib nix-gritql toolPkgsFor;
+    };
     publicLib = api;
   };
 
@@ -42,6 +45,31 @@ let
 
   fmtNames = namesIn fmtFixtures;
   chkNames = namesIn chkFixtures;
+  lock = builtins.fromJSON (builtins.readFile ../flake.lock);
+  hasNestedNixTools = lib.any (
+    node:
+    let
+      locked = node.locked or { };
+    in
+    (locked.owner or null) == "kubijo" && (locked.repo or null) == "nix-tools"
+  ) (lib.attrValues lock.nodes);
+
+  gritConsumer = import ./grit.nix {
+    inherit
+      api
+      lib
+      system
+      toolPkgs
+      ;
+  };
+  astGrepConsumer = import ./ast-grep.nix {
+    inherit
+      api
+      lib
+      system
+      toolPkgs
+      ;
+  };
 
   fmtCheck =
     name:
@@ -60,6 +88,7 @@ let
       harness.mkChkCase name "${chkFixtures}/${name}" (argsFor "chk" name)
     );
 in
+assert lib.assertMsg (!hasNestedNixTools) "flake.lock must not contain a nested nix-tools input";
 rec {
   checks =
     lib.listToAttrs (lib.concatMap fmtCheck fmtNames)
@@ -84,6 +113,8 @@ rec {
         ;
       agree = harness.mkAgreeCheck golden;
       fmt-fail-xml = harness.xmlFailureSafety;
+      ast-grep-consumer = astGrepConsumer;
+      grit-consumer = gritConsumer;
     };
 
   golden = toolPkgs.runCommandLocal "golden" { } (

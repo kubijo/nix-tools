@@ -19,7 +19,7 @@ update:
     #!/usr/bin/env bash
     set -euo pipefail
     root={{ flake_dir }}
-    nix build "$root#internal.{{ system }}.golden" -L --out-link "$root/.tmp/golden"
+    nix build "$root#checks.{{ system }}.agree.golden" -L --out-link "$root/.tmp/golden"
     for produced in "$root"/.tmp/golden/*/; do
         name=$(basename "$produced")
         target="$root/tests/fixtures/fmt/$name/out"

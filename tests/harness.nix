@@ -58,7 +58,7 @@ in
 rec {
   inherit marker formatterFor;
 
-  # Shared with `packages.golden`, so asserting and regenerating cannot drift apart.
+  # Shared with `checks.agree.golden`, so asserting and regenerating cannot drift apart.
   mkGolden =
     name: fixture: args:
     toolPkgs.runCommandLocal "golden-${name}" { } ''
@@ -135,7 +135,7 @@ rec {
   # yamllint's, that neither tool's tests would notice.
   mkAgreeCheck =
     golden:
-    toolPkgs.runCommandLocal "agree" { } ''
+    toolPkgs.runCommandLocal "agree" { passthru = { inherit golden; }; } ''
       cp -r ${golden} work && chmod -R u+w work && cd work
       touch ${marker}
       export HOME="$TMPDIR"
@@ -505,6 +505,34 @@ rec {
     assert hasExactly schemas.checkOptions [
       "prepare"
       "runtimeInputs"
+    ];
+    assert hasExactly schemas.gritArgsOptions [
+      "apply"
+      "check"
+      "common"
+    ];
+    assert hasExactly schemas.gritOptions [
+      "enable"
+      "package"
+      "profiles"
+    ];
+    assert hasExactly schemas.gritProfileOptions [
+      "exclude"
+      "gate"
+      "gritArgs"
+      "paths"
+      "patterns"
+    ];
+    assert hasExactly schemas.astGrepProfileOptions [
+      "configFile"
+      "exclude"
+      "gate"
+      "paths"
+    ];
+    assert hasExactly schemas.astGrepOptions [
+      "enable"
+      "package"
+      "profiles"
     ];
     assert hasExactly schemas.biomeFormatterOptions [
       "configFile"

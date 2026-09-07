@@ -1,5 +1,6 @@
 {
   lib,
+  nix-gritql,
   toolPkgsFor,
   supportedSystems ? null,
 }:
@@ -8,7 +9,14 @@ let
 in
 {
   # The only way in: each primitive behind it carries part of a guarantee.
-  configure = import ./configure.nix { inherit lib toolPkgsFor supportedSystems; };
+  configure = import ./configure.nix {
+    inherit
+      lib
+      nix-gritql
+      supportedSystems
+      toolPkgsFor
+      ;
+  };
 
   # Available before `configure`, so custom splices need no dummy project or foreign nixpkgs.
   inherit toolPkgsFor;
