@@ -8,6 +8,11 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+### Fixed
+
+- Made the Grit terminal-color regression test portable across Linux and macOS by using nixpkgs' platform-specific
+  `script` executable and command syntax.
+
 ## [0.5.0] - 2026-09-08
 
 ### Added

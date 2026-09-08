@@ -226,6 +226,11 @@ let
   aggregateClosure = toolPkgs.closureInfo {
     rootPaths = [ isolatedProject.apps.grit-check.program ];
   };
+  runInPty =
+    if toolPkgs.stdenv.hostPlatform.isDarwin then
+      ''${lib.getExe toolPkgs.unixtools.script} -q -e "$2" "$1"''
+    else
+      ''${lib.getExe toolPkgs.unixtools.script} -q -e -c "$1" "$2"'';
 in
 assert rejectsEmptyProfiles;
 assert rejectsMissingPatterns;
@@ -254,10 +259,14 @@ toolPkgs.runCommandLocal "grit-consumer"
       findutils
       gitMinimal
       gnugrep
-      util-linux
+      unixtools.script
     ];
   }
   ''
+    run_in_pty() {
+      ${runInPty}
+    }
+
     echo 'test: embedded pattern tests are automatic for every profile'
     test -e ${cleanProject.checks.grit-policy-test}
     test -e ${cleanProject.checks.grit-codemod-test}
@@ -574,9 +583,11 @@ toolPkgs.runCommandLocal "grit-consumer"
     cd "$TMPDIR/aggregate-violation"
     ! grep -F $'\033[' "$TMPDIR/aggregate-fail.out" >/dev/null
     set +e
-    env -u NO_COLOR -u CLICOLOR_FORCE script --quiet --return \
-      --command ${lib.escapeShellArg aggregateViolationProject.apps.grit-check.program} \
-      "$TMPDIR/aggregate-color.out" >/dev/null
+    (
+      unset NO_COLOR CLICOLOR_FORCE
+      run_in_pty ${lib.escapeShellArg aggregateViolationProject.apps.grit-check.program} \
+        "$TMPDIR/aggregate-color.out"
+    ) >/dev/null
     status=$?
     set -e
     test "$status" -eq 1
@@ -600,9 +611,11 @@ toolPkgs.runCommandLocal "grit-consumer"
     ! grep -F ' running' "$TMPDIR/aggregate-forced-color.out" >/dev/null
 
     set +e
-    NO_COLOR=1 CLICOLOR_FORCE=1 script --quiet --return \
-      --command ${lib.escapeShellArg aggregateViolationProject.apps.grit-check.program} \
-      "$TMPDIR/aggregate-no-color.out" >/dev/null
+    (
+      export NO_COLOR=1 CLICOLOR_FORCE=1
+      run_in_pty ${lib.escapeShellArg aggregateViolationProject.apps.grit-check.program} \
+        "$TMPDIR/aggregate-no-color.out"
+    ) >/dev/null
     status=$?
     set -e
     test "$status" -eq 1
