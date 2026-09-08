@@ -8,6 +8,8 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-08
+
 ### Added
 
 - Opt-in `format.grit` support for native `*.grit` patterns, using the pinned GritQL executable and failure-safe
