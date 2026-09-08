@@ -12,8 +12,6 @@
   exclude ? [ ],
 }:
 let
-  inherit (import ./options.nix { inherit lib; }) astGrepProfileOptions;
-
   isRelative =
     value:
     lib.isString value
@@ -27,7 +25,6 @@ let
     name:
     builtins.stringLength name <= 64 && builtins.match "^[a-z]([a-z0-9-]*[a-z0-9])?$" name != null;
 
-  normalized = lib.mapAttrs (_: astGrepProfileOptions) profiles;
   astGrepPackage = if package == null then toolPkgs.ast-grep else package;
 
   configureProfile =
@@ -97,7 +94,7 @@ let
       inherit (profile) gate;
     };
 
-  configured = lib.mapAttrs configureProfile normalized;
+  configured = lib.mapAttrs configureProfile profiles;
   runnable = runner: {
     type = "app";
     program = lib.getExe runner;

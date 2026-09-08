@@ -37,6 +37,31 @@ rec {
         ;
     };
 
+  # The wrapper depends on Grit's exact format/write argv and cannot safely expose
+  # the generic argument-replacement escape hatches.
+  gritFormatterOptions =
+    {
+      enable ? true,
+      exclude ? [ ],
+      includes ? null,
+      package ? null,
+      exe ? null,
+      priority ? null,
+    }:
+    {
+      inherit
+        enable
+        exclude
+        includes
+        package
+        exe
+        priority
+        ;
+      configFile = null;
+      options = null;
+      extraOptions = [ ];
+    };
+
   fileCheckerOptions =
     {
       enable ? true,

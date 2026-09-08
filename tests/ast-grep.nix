@@ -13,6 +13,10 @@ let
     api.configure {
       inherit src system;
       exclude = [ "source-two/excluded.js" ];
+      format.exclude = [
+        "*.js"
+        "*.rs"
+      ];
       lint.ast-grep.profiles = {
         javascript = {
           inherit configFile;
@@ -33,6 +37,17 @@ let
   disabledProject = api.configure {
     inherit system;
     src = fixtureRoot + "/clean";
+  };
+  disabledProfilesProject = api.configure {
+    inherit system;
+    src = fixtureRoot + "/clean";
+    lint.ast-grep = {
+      enable = false;
+      profiles.policy = {
+        inherit configFile;
+        paths = [ "." ];
+      };
+    };
   };
 
   rejects = value: !(builtins.tryEval value).success;
@@ -83,6 +98,23 @@ let
     lint.ast-grep.profiles.codemod = {
       inherit configFile;
       paths = [ "source one" ];
+      gate = false;
+    };
+  };
+  ungatedViolationProject = api.configure {
+    inherit system;
+    src = fixtureRoot + "/violation";
+    format.exclude = [
+      "*.js"
+      "*.rs"
+    ];
+    lint.ast-grep.profiles.codemod = {
+      inherit configFile;
+      paths = [
+        "source one"
+        "source-two"
+        "rust code"
+      ];
       gate = false;
     };
   };
@@ -147,6 +179,7 @@ assert rejects unsafeExcludeProject.checks.ast-grep-policy;
 assert !(builtins.hasAttr "ast-grep-javascript" disabledProject.checks);
 assert !(builtins.hasAttr "ast-grep-javascript-check" disabledProject.apps);
 assert !(builtins.hasAttr "ast-grep-javascript-apply" disabledProject.apps);
+assert builtins.baseNameOf disabledProfilesProject.apps.lint.program == "repochk";
 assert !(builtins.hasAttr "ast-grep-codemod" ungatedProject.checks);
 toolPkgs.runCommandLocal "ast-grep-consumer"
   {
@@ -167,6 +200,39 @@ toolPkgs.runCommandLocal "ast-grep-consumer"
     test -x ${cleanProject.apps.ast-grep-rust-apply.program}
     test -x ${ungatedProject.apps.ast-grep-codemod-check.program}
     test -x ${ungatedProject.apps.ast-grep-codemod-apply.program}
+    mkdir "$TMPDIR/clean-gate"
+    cp -R ${fixtureRoot + "/clean"}/. "$TMPDIR/clean-gate/"
+    chmod -R u+w "$TMPDIR/clean-gate"
+    cd "$TMPDIR/clean-gate"
+    ${cleanProject.apps.lint.program}
+    ${cleanProject.apps.validate.program}
+
+    echo 'test: normal lint and validate include only gated checks'
+    mkdir "$TMPDIR/normal-gate"
+    cp -R ${fixtureRoot + "/violation"}/. "$TMPDIR/normal-gate/"
+    chmod -R u+w "$TMPDIR/normal-gate"
+    cp -R "$TMPDIR/normal-gate" "$TMPDIR/normal-gate-before"
+    cd "$TMPDIR/normal-gate/source one"
+    if ${violationProject.apps.lint.program} >"$TMPDIR/lint-gate.out" 2>&1; then
+      echo 'normal lint omitted a gated ast-grep violation' >&2
+      exit 1
+    fi
+    grep -F 'ast-grep check: javascript' "$TMPDIR/lint-gate.out" >/dev/null
+    grep -F 'ast-grep check: rust' "$TMPDIR/lint-gate.out" >/dev/null
+    diff -qr --exclude=.tmp "$TMPDIR/normal-gate-before" "$TMPDIR/normal-gate"
+
+    if ${violationProject.apps.validate.program} >"$TMPDIR/validate-gate.out" 2>&1; then
+      echo 'normal validation omitted a gated ast-grep violation' >&2
+      exit 1
+    fi
+    grep -F 'ast-grep check: javascript' "$TMPDIR/validate-gate.out" >/dev/null
+    grep -F 'ast-grep check: rust' "$TMPDIR/validate-gate.out" >/dev/null
+    diff -qr --exclude=.tmp "$TMPDIR/normal-gate-before" "$TMPDIR/normal-gate"
+
+    cd "$TMPDIR/normal-gate"
+    ${ungatedViolationProject.apps.lint.program} >"$TMPDIR/ungated.out" 2>&1
+    ! grep -F 'ast-grep check: codemod' "$TMPDIR/ungated.out" >/dev/null
+    diff -qr --exclude=.tmp "$TMPDIR/normal-gate-before" "$TMPDIR/normal-gate"
 
     echo 'test: read-only diagnostics, exclusions, spaces, and root discovery'
     mkdir "$TMPDIR/read-only"

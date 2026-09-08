@@ -1,9 +1,14 @@
-{ lib, toolPkgsFor }:
+{
+  lib,
+  nix-gritql,
+  toolPkgsFor,
+}:
 let
   options = import ./options.nix { inherit lib; };
   inherit (options)
     toggle
     formatterOptions
+    gritFormatterOptions
     biomeFormatterOptions
     formatterSpecOptions
     defaultExcludes
@@ -50,6 +55,7 @@ in
   protobuf ? false,
   sql ? false,
   po ? false,
+  grit ? false,
   xml ? false,
   svg ? false,
   png ? false,
@@ -134,6 +140,9 @@ let
         caddyfile
         ;
     }
+    // {
+      grit = toggle gritFormatterOptions grit;
+    }
     // lib.mapAttrs (_: toggle biomeFormatterOptions) {
       inherit javascript typescript;
     };
@@ -145,6 +154,7 @@ let
         system
         toolPkgs
         nodejs
+        nix-gritql
         args
         ;
     }

@@ -1,0 +1,3 @@
+language js(js_do_not_use)
+
+`legacyJs($value)` => `modernJs($value)`

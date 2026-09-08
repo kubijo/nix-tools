@@ -4,6 +4,7 @@
   system,
   toolPkgs,
   nodejs,
+  nix-gritql,
   args,
 }:
 let
@@ -27,6 +28,15 @@ let
       toolPkgs.diffutils
     ];
     text = builtins.readFile ./xml-format.sh;
+  };
+
+  gritFormat = toolPkgs.writeShellApplication {
+    name = "grit-format";
+    runtimeInputs = [
+      toolPkgs.coreutils
+      toolPkgs.diffutils
+    ];
+    text = builtins.readFile ./grit-format.sh;
   };
 
   # The wrapper reads the tool and its argv at run time, so both stay in `options`.
@@ -257,6 +267,19 @@ let
         "*.po"
         "*.pot"
       ];
+    };
+
+    grit = {
+      mkCommand = lib.getExe gritFormat;
+      package = nix-gritql.lib.mkGrit { inherit toolPkgs; };
+      binary = "grit";
+      options = [
+        "format"
+        "--write"
+        "--output"
+        "none"
+      ];
+      includes = [ "*.grit" ];
     };
 
     xml = {

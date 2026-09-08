@@ -81,6 +81,7 @@ The pinned set supports `x86_64-linux`, `aarch64-linux` and `aarch64-darwin`; ot
 | `protobuf`   | [`buf`]      | `*.proto`                      | ❌ off  |
 | `sql`        | [`sqlfluff`] | `*.sql`                        | ❌ off  |
 | `po`         | [`msgcat`]   | `*.po` `*.pot`                 | ❌ off  |
+| `grit`       | [`GritQL`]   | `*.grit`                       | ❌ off  |
 | `xml`        | [`xmllint`]  | `*.xml` `*.gpx`                | ❌ off  |
 | `svg`        | [`svgo`]     | `*.svg`                        | ❌ off  |
 | `png`        | [`oxipng`]   | `*.png`                        | ❌ off  |
@@ -88,6 +89,11 @@ The pinned set supports `x86_64-linux`, `aarch64-linux` and `aarch64-darwin`; ot
 
 `javascript.organizeImports` and `typescript.organizeImports` opt into a Biome assist phase before formatting, using the
 same pinned executable, config and scope. This mode rejects a wholesale `options` replacement.
+
+The Grit formatter uses the GritQL revision pinned through `nix-gritql`. Because `grit format` is directory-scoped,
+repofmt formats its selected `*.grit` files in isolation and replaces the originals only after the complete batch
+succeeds. Its operation is fixed, so `format.grit` deliberately does not accept `configFile`, `options`, or
+`extraOptions`. Markdown pattern files remain ordinary Markdown inputs.
 
 `onUnmatched` defaults to `fatal`, so the first unclaimed file type fails the run rather than rotting unformatted.
 
@@ -150,9 +156,16 @@ same repository.
 
 ## Grit
 
-Structural checks and their explicit codemod counterparts use named `lint.grit` profiles. A pattern source is a `.grit`
-or Markdown file, or a directory containing either; target paths and exclusions are relative to the consumer source
-root:
+Structural checks and their explicit codemod counterparts use named `lint.grit` profiles. `patterns` is an existing
+directory containing only subdirectories and regular Markdown pattern files. Each filename stem is a stable Grit name,
+must match `^[a-z][a-z0-9_]*$`, and must be unique across the collection. A document's first heading is its title, its
+first paragraph is the violation explanation, its single `grit` fence is the executable pattern, and the following code
+fences are executable samples: an input/output pair asserts a rewrite, while an unpaired input asserts no match.
+Omitting `=>` makes a match-only policy; including it makes a fixable policy or codemod. The generated Grit
+configuration remains an internal store artifact.
+
+`paths` contains existing directories relative to the consumer source root. It bounds traversal; `exclude` contains
+root-relative globs that are pruned during that traversal:
 
 ```nix
 lint.grit = {
@@ -170,13 +183,29 @@ lint.grit = {
 };
 ```
 
-Every profile requires `patterns` and at least one target in `paths`, and exports `grit-NAME-check` and
-`grit-NAME-apply` apps. Profiles are gated by default and add a `checks.grit-NAME` entry; `gate = false` keeps an
-explicit codemod out of `flake check`. Only an apply app rewrites files, and apply apps never join repochk or the
-default `format`, `lint`, and `validate` apps. Repository-wide and lint exclusions compose with each profile's
-exclusions. A top-level `package` replaces the Grit executable for every profile, while `toolPkgs` supplies its runner
-dependencies. `gritArgs.common` accepts `--log-level`; `.check` and `.apply` additionally accept `--verbose`. Grit apps
-accept no runtime arguments, preserving the profile's declared behavior and scope.
+Every profile requires `patterns` and at least one target in `paths`, and exports `grit-NAME-check`, `grit-NAME-apply`,
+and `grit-NAME-test` apps. Enabling Grit also exports the aggregate `grit-check` app. Profiles are gated by default and
+add a `checks.grit-NAME` entry; `gate = false` keeps the repository scan out of `flake check`, `lint`, and `validate`.
+Pattern tests are always read-only and therefore export a `checks.grit-NAME-test` entry and join the normal lint and
+validation apps even for codemod-only profiles. Gated scans join those local gates through the same aggregate app.
+
+Only an apply app rewrites files; apply apps never join formatting, linting, validation, or checks. Selection ignores
+ambient Git and user ignore files, walks only the configured directories, deduplicates overlapping roots, and composes
+repository-wide and lint exclusions with each profile's exclusions. Grit apps accept no runtime arguments, preserving
+the profile's declared behavior and scope.
+
+A top-level `package` replaces the Grit executable for every profile, while `toolPkgs` supplies its runner dependencies.
+`gritArgs.common` accepts `--log-level`; `.check` and `.apply` additionally accept `--verbose`. Check output retains
+Grit's file, location, match-or-rewrite kind, Markdown explanation, and pattern name.
+
+Use `nix run .#grit-check` for interactive diagnostics. It discovers every profile, tests every pattern collection,
+scans every gated profile even after an earlier failure, prefixes output with the profile and operation, and reports one
+aggregate result without building the failing check derivations. Successful operations collapse to one line; a failure
+replays that operation's complete nonblank output exactly once. On a terminal, attribution is dimmed, passes are green,
+and Grit's diagnostic colors are retained. `NO_COLOR` suppresses all styling; redirected output remains plain unless the
+caller explicitly forces color. Use the individual checks or `nix flake check` for CI, where independently cached
+derivations are the intended interface. The aggregate exits `1` for policy or pattern-test failures and `2` when it
+observes a runner or infrastructure failure.
 
 ## ast-grep
 
@@ -195,20 +224,21 @@ lint.ast-grep = {
 The `policy` profile exports the read-only `checks.ast-grep-policy` check and the explicit `apps.ast-grep-policy-check`
 and `apps.ast-grep-policy-apply` apps. The apps accept no runtime arguments: their configuration and scope come only
 from the profile. Check mode forces findings to error severity; only the apply app supplies `--update-all`. Profiles are
-gated by default; `gate = false` retains both apps without adding a check. Neither app joins repochk or the default
-`format`, `lint`, and `validate` apps, so `flake check` scans each gated profile once and no ordinary gate can apply
-rewrites. Repository-wide and lint exclusions compose with each profile's exclusions. A top-level `package` replaces the
-shared ast-grep executable; otherwise the selected `toolPkgs.ast-grep` is used.
+gated by default; `gate = false` retains both apps without adding a check. Neither app joins the default `format` app.
+Gated check apps join `lint` and `validate`; apply apps never join any gate. Exported checks stay separate, so
+`flake check` scans each gated profile once. Repository-wide and lint exclusions compose with each profile's exclusions.
+A top-level `package` replaces the shared ast-grep executable; otherwise the selected `toolPkgs.ast-grep` is used.
 
 ## Options
 
 Every toggle is a bool or an attrset of that entry's options, and the attrset is destructured strictly, so a misspelled
 key throws rather than being ignored. Excludes come in three narrowing layers:
 
-Formatter toggles accept `enable`, `exclude`, `includes`, `configFile`, `package`, `exe`, `options`, `extraOptions` and
-`priority`; file checkers omit `options` and `priority`, and add `batch`. `links` also takes `ignoreLinks`. `grit` and
-`ast-grep` each take `package` plus a strict `profiles` attrset. Grit profiles contain `patterns`, `paths`, `exclude`,
-`gritArgs`, and `gate`; ast-grep profiles contain `configFile`, `paths`, `exclude`, and `gate`.
+Most formatter toggles accept `enable`, `exclude`, `includes`, `configFile`, `package`, `exe`, `options`, `extraOptions`
+and `priority`; the fixed-operation Grit formatter omits the three argument/configuration fields. File checkers omit
+`options` and `priority`, and add `batch`. `links` also takes `ignoreLinks`. `grit` and `ast-grep` each take `package`
+plus a strict `profiles` attrset. Grit profiles contain `patterns`, `paths`, `exclude`, `gritArgs`, and `gate`; ast-grep
+profiles contain `configFile`, `paths`, `exclude`, and `gate`.
 
 ```nix
 nix-tools.lib.configure {
@@ -335,6 +365,7 @@ baked into a wrapper script, cannot invalidate the cache, so editing it becomes 
 [`buf`]: https://buf.build
 [`caddy`]: https://caddyserver.com
 [`deadnix`]: https://github.com/astro/deadnix
+[`gritql`]: https://github.com/biomejs/gritql
 [`just`]: https://github.com/casey/just
 [`lychee`]: https://github.com/lycheeverse/lychee
 [`mdformat`]: https://mdformat.rtfd.io/

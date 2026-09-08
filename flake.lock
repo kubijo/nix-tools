@@ -28,16 +28,16 @@
         "web-tree-sitter-src": "web-tree-sitter-src"
       },
       "locked": {
-        "lastModified": 1788769045,
-        "narHash": "sha256-4FVOgQPtAyQXVCfpwT3R4JCvA6iTC3hNT5DM1HgAkLo=",
+        "lastModified": 1788859106,
+        "narHash": "sha256-ZIOXYadKm4uB5S5Ga0VCrhfhF3D579YiYtU2VEjGlMA=",
         "owner": "kubijo",
         "repo": "nix-gritql",
-        "rev": "7d30bac3f7f396b098e9cd6fe342b70d4ebb2bbb",
+        "rev": "a7dd64d332f5339653d79797a2e3ed3598452269",
         "type": "github"
       },
       "original": {
         "owner": "kubijo",
-        "ref": "v0.4.1",
+        "ref": "v0.5.0",
         "repo": "nix-gritql",
         "type": "github"
       }

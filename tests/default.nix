@@ -11,7 +11,9 @@ let
   toolPkgsFor = _: toolPkgs;
   harness = import ./harness.nix {
     inherit lib system toolPkgs;
-    mkFormatter = import ../lib/formatter.nix { inherit lib toolPkgsFor; };
+    mkFormatter = import ../lib/formatter.nix {
+      inherit lib nix-gritql toolPkgsFor;
+    };
     mkChecker = import ../lib/checker.nix { inherit lib toolPkgsFor; };
     mkValidate = import ../lib/validate.nix { inherit lib toolPkgsFor; };
     configure = import ../lib/configure.nix {
@@ -112,6 +114,7 @@ rec {
         unsupportedSystem
         ;
       agree = harness.mkAgreeCheck golden;
+      fmt-fail-grit = harness.gritFailureSafety;
       fmt-fail-xml = harness.xmlFailureSafety;
       ast-grep-consumer = astGrepConsumer;
       grit-consumer = gritConsumer;

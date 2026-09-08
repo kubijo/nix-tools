@@ -27,8 +27,14 @@ let
     '';
 
   all =
-    lib.optional (formatter != null) "${lib.getExe formatter} --ci"
-    ++ lib.optional (checker != null) (lib.getExe checker)
+    lib.optional (formatter != null) {
+      name = "Formatting";
+      run = "${lib.getExe formatter} --ci";
+    }
+    ++ lib.optional (checker != null) {
+      name = "Linting";
+      run = lib.getExe checker;
+    }
     ++ steps;
 
   # The steps take the formatter's own runtime, so `pnpm` and `prettier` share one node.

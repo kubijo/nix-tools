@@ -8,6 +8,27 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in `format.grit` support for native `*.grit` patterns, using the pinned GritQL executable and failure-safe
+  replacement.
+- Markdown-only Grit pattern collections with colocated explanations, executable patterns, and regression samples.
+- Read-only Grit pattern-test checks and apps for every profile, including ungated codemod collections.
+- A read-only `grit-check` app that tests every Grit profile, scans every gated profile, attributes each output line,
+  collapses passing operations, replays nonblank failure output once, retains terminal colors while respecting
+  `NO_COLOR`, and reports one aggregate interactive result without realizing the individual failing check derivations.
+
+### Fixed
+
+- Included gated Grit and ast-grep scans, plus Grit pattern tests, in the normal `lint` and `validate` apps without
+  invoking any apply runner or duplicating exported flake checks.
+- Scoped Grit traversal to concrete target directories and applied composed exclusions through one rooted explicit
+  ignore file, without consulting ambient ignore state or enumerating the repository root.
+- Deduplicated files selected through overlapping Grit target roots and classified target-selection errors as runner
+  failures.
+- Kept the Grit formatter's fixed safe operation out of generic argument overrides.
+- Replaced generated store-path headings in composed lint and validation output with stable labels.
+
 ## [0.4.0] - 2026-09-07
 
 ### Added

@@ -8,6 +8,7 @@
 let
   inherit (import ./options.nix { inherit lib; })
     astGrepOptions
+    astGrepProfileOptions
     checkOptions
     defaultExcludeDirs
     defaultExcludeFiles
@@ -16,7 +17,10 @@ let
     toggle
     ;
   mkAstGrep = import ./ast-grep.nix { inherit lib toolPkgsFor; };
-  mkFormatter = import ./formatter.nix { inherit lib toolPkgsFor; };
+  mkGrit = import ./grit.nix { inherit lib nix-gritql toolPkgsFor; };
+  mkFormatter = import ./formatter.nix {
+    inherit lib nix-gritql toolPkgsFor;
+  };
   mkChecker = import ./checker.nix { inherit lib toolPkgsFor; };
   mkChecks = import ./checks.nix { inherit lib toolPkgsFor; };
   mkValidate = import ./validate.nix { inherit lib toolPkgsFor; };
@@ -60,6 +64,8 @@ let
   checkArgs = checkOptions check;
   grit = toggle gritOptions (lint.grit or false);
   astGrep = toggle astGrepOptions (lint.ast-grep or false);
+  astGrepProfiles = lib.mapAttrs (_: astGrepProfileOptions) astGrep.profiles;
+  structuralLintEnabled = structuralLintSteps != [ ];
   lintWithoutStructural = removeAttrs lint [
     "grit"
     "ast-grep"
@@ -77,7 +83,13 @@ let
   withExcludes = cfg: cfg // { exclude = exclude ++ (cfg.exclude or [ ]); };
 
   formatter = mkFormatter (common // { inherit nodejs; } // withExcludes format);
-  checker = mkChecker (common // withExcludes lintWithoutStructural);
+  fileChecker = mkChecker (
+    common
+    // withExcludes lintWithoutStructural
+    // {
+      name = if structuralLintEnabled then "repochk-files" else "repochk";
+    }
+  );
   expandStructuralDefault =
     value:
     if lib.elem value defaultExcludeDirs then
@@ -104,21 +116,18 @@ let
     assert lib.assertMsg (
       profile.paths != [ ]
     ) "lint.grit.profiles.${name}.paths must contain at least one target";
-    profile
-    // {
-      inherit treeRootFile;
-      exclude = structuralExcludes ++ profile.exclude;
-    }
-    // lib.optionalAttrs (grit.package != null) { gritPackage = grit.package; }
+    profile // { exclude = structuralExcludes ++ profile.exclude; }
   ) grit.profiles;
   gritProject =
     if grit.enable then
-      nix-gritql.lib.configureProfiles {
+      mkGrit {
         inherit
           src
           system
           toolPkgs
+          treeRootFile
           ;
+        inherit (grit) package;
         profiles = gritProfiles;
       }
     else
@@ -132,11 +141,38 @@ let
           toolPkgs
           treeRootFile
           ;
-        inherit (astGrep) package profiles;
+        inherit (astGrep) package;
+        profiles = astGrepProfiles;
         exclude = structuralExcludes;
       }
     else
       null;
+  gritLintSteps = lib.optional grit.enable {
+    name = "Grit";
+    run = gritProject.apps.grit-check.program;
+  };
+  astGrepLintSteps = lib.optionals astGrep.enable (
+    map (name: {
+      name = "ast-grep check: ${name}";
+      run = astGrepProject.apps."ast-grep-${name}-check".program;
+    }) (lib.attrNames (lib.filterAttrs (_: profile: profile.gate) astGrepProfiles))
+  );
+  structuralLintSteps = gritLintSteps ++ astGrepLintSteps;
+  checker =
+    if !structuralLintEnabled then
+      fileChecker
+    else
+      mkValidate {
+        inherit system toolPkgs;
+        name = "repochk";
+        steps = [
+          {
+            name = "File checks";
+            run = lib.getExe fileChecker;
+          }
+        ]
+        ++ structuralLintSteps;
+      };
   gate = mkValidate (
     {
       inherit
@@ -191,8 +227,8 @@ assert lib.assertMsg (misplaced gateOwned validate == [ ])
         toolPkgs
         src
         formatter
-        checker
         ;
+      checker = fileChecker;
       inherit (checkArgs) prepare runtimeInputs;
     }
     // lib.optionalAttrs grit.enable gritProject.checks

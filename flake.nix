@@ -8,7 +8,7 @@
     nixpkgs-pinned.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
     nix-gritql = {
-      url = "github:kubijo/nix-gritql/v0.4.1";
+      url = "github:kubijo/nix-gritql/v0.5.0";
       inputs.nixpkgs-pinned.follows = "nixpkgs-pinned";
     };
   };

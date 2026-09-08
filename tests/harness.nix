@@ -45,6 +45,7 @@ let
     python = "ruff";
     sql = "sqlfluff";
     xml = "libxml2";
+    grit = "callPackage";
   };
 
   workCopy = src: ''
@@ -103,6 +104,36 @@ rec {
         exit 1
       fi
       ${toolPkgs.diffutils}/bin/cmp malformed.xml ../original.xml
+      touch "$out"
+    '';
+
+  gritFailureSafety =
+    let
+      formatter = formatterFor { grit = true; };
+    in
+    toolPkgs.runCommandLocal "fmt-fail-grit" { } ''
+      mkdir work
+      cp ${./fixtures/fmt-fail/grit/malformed.grit} work/malformed.grit
+      cp ${./fixtures/fmt/grit/in/messy.grit} work/valid.grit
+      chmod u+w work/malformed.grit work/valid.grit
+      chmod 751 work/valid.grit
+      cp work/malformed.grit original-malformed.grit
+      cp work/valid.grit original-valid.grit
+      cd work
+      touch ${marker}
+      export HOME="$TMPDIR"
+
+      if ${lib.getExe formatter} --no-cache; then
+        echo "malformed Grit unexpectedly formatted successfully" >&2
+        exit 1
+      fi
+      ${toolPkgs.diffutils}/bin/cmp malformed.grit ../original-malformed.grit
+      ${toolPkgs.diffutils}/bin/cmp valid.grit ../original-valid.grit
+
+      rm malformed.grit
+      ${lib.getExe formatter} --no-cache
+      ${toolPkgs.diffutils}/bin/cmp valid.grit ${./fixtures/fmt/grit/out/messy.grit}
+      test "$(stat -c %a valid.grit)" = 751
       touch "$out"
     '';
 
@@ -510,6 +541,14 @@ rec {
       "apply"
       "check"
       "common"
+    ];
+    assert hasExactly schemas.gritFormatterOptions [
+      "enable"
+      "exclude"
+      "exe"
+      "includes"
+      "package"
+      "priority"
     ];
     assert hasExactly schemas.gritOptions [
       "enable"

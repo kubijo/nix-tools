@@ -5,43 +5,75 @@
   toolPkgs,
 }:
 let
+  inherit (builtins) hasAttr;
+
   fixtureRoot = ./fixtures/grit;
-  patterns = fixtureRoot + "/patterns";
+  policyPatterns = fixtureRoot + "/policy";
+  codemodPatterns = fixtureRoot + "/codemods";
+  brokenPatterns = fixtureRoot + "/broken";
+
   configure =
     src:
     api.configure {
       inherit src system;
+      format.exclude = [
+        "*.css"
+        "*.yaml"
+      ];
       lint = {
         exclude = [ "source-two/excluded.yaml" ];
-        grit.profiles.main = {
-          inherit patterns;
-          paths = [
-            "source one"
-            "source-two"
-          ];
-          gritArgs.common = [
-            "--log-level"
-            "info"
-          ];
+        grit.profiles = {
+          policy = {
+            patterns = policyPatterns;
+            paths = [ "source one" ];
+          };
+          codemod = {
+            patterns = codemodPatterns;
+            paths = [
+              "source one"
+              "source-two"
+            ];
+            gate = false;
+          };
         };
       };
     };
+
   cleanProject = configure (fixtureRoot + "/clean");
   violationProject = configure (fixtureRoot + "/violation");
-  profiledProject = api.configure {
+  aggregateViolationProject = api.configure {
+    inherit system;
+    src = fixtureRoot + "/violation";
+    format.exclude = [
+      "*.css"
+      "*.yaml"
+    ];
+    lint = {
+      exclude = [ "source-two/excluded.yaml" ];
+      grit.profiles = {
+        css-policy = {
+          patterns = policyPatterns;
+          paths = [ "source one" ];
+        };
+        ungated = {
+          patterns = codemodPatterns;
+          paths = [ "source one" ];
+          gate = false;
+        };
+        yaml-policy = {
+          patterns = codemodPatterns;
+          paths = [ "source-two" ];
+        };
+      };
+    };
+  };
+  brokenProject = api.configure {
     inherit system;
     src = fixtureRoot + "/clean";
-    lint.grit.profiles = {
-      policy = {
-        inherit patterns;
-        paths = [ "source one" ];
-      };
-      rename-data = {
-        inherit patterns;
-        paths = [ "source-two" ];
-        exclude = [ "source-two/excluded.yaml" ];
-        gate = false;
-      };
+    lint.grit.profiles.broken = {
+      patterns = brokenPatterns;
+      paths = [ "source one" ];
+      gate = false;
     };
   };
 
@@ -62,29 +94,55 @@ let
   missingPathsProject = api.configure {
     inherit system;
     src = fixtureRoot + "/clean";
-    lint.grit.profiles.main = { inherit patterns; };
+    lint.grit.profiles.main.patterns = policyPatterns;
+  };
+  singlePatternProject = api.configure {
+    inherit system;
+    src = fixtureRoot + "/clean";
+    lint.grit.profiles.main = {
+      patterns = fixtureRoot + "/markdown-patterns/policy.md";
+      paths = [ "source one" ];
+    };
+  };
+  nativePatternsProject = api.configure {
+    inherit system;
+    src = fixtureRoot + "/clean";
+    lint.grit.profiles.main = {
+      patterns = fixtureRoot + "/patterns";
+      paths = [ "source one" ];
+    };
+  };
+  globPathProject = api.configure {
+    inherit system;
+    src = fixtureRoot + "/clean";
+    lint.grit.profiles.main = {
+      patterns = policyPatterns;
+      paths = [ "source-*" ];
+    };
+  };
+  unsafeArgsProject = api.configure {
+    inherit system;
+    src = fixtureRoot + "/clean";
+    lint.grit.profiles.main = {
+      patterns = policyPatterns;
+      paths = [ "source one" ];
+      gritArgs.check = [ "source-two" ];
+    };
   };
   rejects = value: !(builtins.tryEval (builtins.deepSeq value true)).success;
-  unsafeArgsProject =
-    gritArgs:
-    api.configure {
-      inherit system;
-      src = fixtureRoot + "/clean";
-      lint.grit.profiles.main = {
-        inherit gritArgs patterns;
-        paths = [ "source one" ];
-      };
-    };
   rejectsEmptyProfiles = rejects (builtins.attrNames emptyProfilesProject.checks);
-  rejectsMissingPatterns = rejects missingPatternsProject.checks.grit-main;
-  rejectsMissingPaths = rejects missingPathsProject.checks.grit-main;
-  rejectsHelpArgs = rejects (unsafeArgsProject { common = [ "--help" ]; }).checks.grit-main;
-  rejectsScopeArgs = rejects (unsafeArgsProject { check = [ "source-two" ]; }).checks.grit-main;
+  rejectsMissingPatterns = rejects (builtins.attrNames missingPatternsProject.checks);
+  rejectsMissingPaths = rejects (builtins.attrNames missingPathsProject.checks);
+  rejectsSinglePattern = rejects (builtins.attrNames singlePatternProject.checks);
+  rejectsNativePatterns = rejects (builtins.attrNames nativePatternsProject.checks);
+  rejectsGlobPath = rejects (builtins.attrNames globPathProject.checks);
+  rejectsScopeArgs = rejects (builtins.attrNames unsafeArgsProject.checks);
 
   fakeGrit = toolPkgs.writeShellApplication {
     name = "grit";
     text = ''
-      : > "''${FAKE_GRIT_MARKER:?}"
+      printf '%q ' "$@" >> "''${FAKE_GRIT_MARKER:?}"
+      printf '\n' >> "$FAKE_GRIT_MARKER"
       exit "''${FAKE_GRIT_STATUS:-0}"
     '';
     meta.mainProgram = "grit";
@@ -92,7 +150,10 @@ let
   customFd = toolPkgs.writeShellApplication {
     name = "fd";
     text = ''
-      : > "''${CUSTOM_FD_MARKER:?}"
+      printf '%s\n' "$@" > "''${CUSTOM_FD_MARKER:?}"
+      if [[ -n ''${CUSTOM_FD_STATUS:-} ]]; then
+        exit "$CUSTOM_FD_STATUS"
+      fi
       exec ${lib.getExe toolPkgs.fd} "$@"
     '';
     meta.mainProgram = "fd";
@@ -106,21 +167,85 @@ let
     lint.grit = {
       package = fakeGrit;
       profiles.main = {
-        inherit patterns;
+        patterns = policyPatterns;
         paths = [ "source one" ];
       };
     };
+  };
+  overlappingProject = api.configure {
+    inherit system;
+    src = fixtureRoot + "/clean";
+    lint.grit = {
+      package = fakeGrit;
+      profiles.main = {
+        patterns = policyPatterns;
+        paths = [
+          "."
+          "source one"
+        ];
+        gate = false;
+      };
+    };
+  };
+  noApplyProject = api.configure {
+    inherit system;
+    src = fixtureRoot + "/clean";
+    format.exclude = [
+      "*.css"
+      "*.yaml"
+    ];
+    lint.grit = {
+      package = fakeGrit;
+      profiles.main = {
+        patterns = policyPatterns;
+        paths = [ "source one" ];
+      };
+    };
+  };
+  noApplyFormatProject = api.configure {
+    inherit system;
+    src = ./fixtures/fmt/grit/in;
+    treeRootFile = "formatted.grit";
+    format.grit = {
+      package = fakeGrit;
+    };
+  };
+  consumerBuild = toolPkgs.runCommandLocal "consumer-rust-build-must-not-run" { } ''
+    echo 'the aggregate app pulled in the consumer build closure' >&2
+    exit 99
+  '';
+  isolatedProject = api.configure {
+    inherit system;
+    src = fixtureRoot + "/clean";
+    validate.runtimeInputs = [ consumerBuild ];
+    lint.grit.profiles.main = {
+      patterns = policyPatterns;
+      paths = [ "source one" ];
+    };
+  };
+  aggregateClosure = toolPkgs.closureInfo {
+    rootPaths = [ isolatedProject.apps.grit-check.program ];
   };
 in
 assert rejectsEmptyProfiles;
 assert rejectsMissingPatterns;
 assert rejectsMissingPaths;
-assert rejectsHelpArgs;
+assert rejectsSinglePattern;
+assert rejectsNativePatterns;
+assert rejectsGlobPath;
 assert rejectsScopeArgs;
-assert !(builtins.hasAttr "grit-main" disabledProject.checks);
-assert !(builtins.hasAttr "grit-main-check" disabledProject.apps);
-assert !(builtins.hasAttr "grit-main-apply" disabledProject.apps);
-assert !(builtins.hasAttr "grit-rename-data" profiledProject.checks);
+assert !(hasAttr "grit-policy" disabledProject.checks);
+assert !(hasAttr "grit-policy-test" disabledProject.checks);
+assert !(hasAttr "grit-policy-check" disabledProject.apps);
+assert !(hasAttr "grit-policy-apply" disabledProject.apps);
+assert !(hasAttr "grit-policy-test" disabledProject.apps);
+assert !(hasAttr "grit-check" disabledProject.apps);
+assert hasAttr "grit-policy" cleanProject.checks;
+assert hasAttr "grit-policy-test" cleanProject.checks;
+assert hasAttr "grit-codemod-test" cleanProject.checks;
+assert !(hasAttr "grit-codemod" cleanProject.checks);
+assert !(hasAttr "grit-check" cleanProject.checks);
+assert hasAttr "grit-check" cleanProject.apps;
 toolPkgs.runCommandLocal "grit-consumer"
   {
     nativeBuildInputs = with toolPkgs; [
@@ -129,56 +254,170 @@ toolPkgs.runCommandLocal "grit-consumer"
       findutils
       gitMinimal
       gnugrep
+      util-linux
     ];
   }
   ''
+    echo 'test: embedded pattern tests are automatic for every profile'
+    test -e ${cleanProject.checks.grit-policy-test}
+    test -e ${cleanProject.checks.grit-codemod-test}
+    ${cleanProject.apps.grit-policy-test.program} >"$TMPDIR/policy-test.out" 2>&1
+    grep -F 'Found 1 testable patterns.' "$TMPDIR/policy-test.out" >/dev/null
+    grep -F 'All 2 samples passed.' "$TMPDIR/policy-test.out" >/dev/null
+    ${cleanProject.apps.grit-codemod-test.program} >"$TMPDIR/codemod-test.out" 2>&1
+    grep -F 'Found 2 testable patterns.' "$TMPDIR/codemod-test.out" >/dev/null
+    grep -F 'All 4 samples passed.' "$TMPDIR/codemod-test.out" >/dev/null
+
+    echo 'test: passing aggregate app has one concise result'
+    cd ${fixtureRoot + "/clean"}
+    ${cleanProject.apps.grit-check.program} >"$TMPDIR/aggregate-clean.out" 2>&1
+    grep -Fx '[grit:policy:test] passed' "$TMPDIR/aggregate-clean.out" >/dev/null
+    grep -Fx '[grit:policy:check] passed' "$TMPDIR/aggregate-clean.out" >/dev/null
+    grep -Fx '[grit:codemod:test] passed' "$TMPDIR/aggregate-clean.out" >/dev/null
+    test "$(grep -c '^\[grit:policy:test\]' "$TMPDIR/aggregate-clean.out")" -eq 1
+    test "$(grep -c '^\[grit:policy:check\]' "$TMPDIR/aggregate-clean.out")" -eq 1
+    test "$(grep -c '^\[grit:codemod:test\]' "$TMPDIR/aggregate-clean.out")" -eq 1
+    ! grep -F '[grit:codemod:check]' "$TMPDIR/aggregate-clean.out" >/dev/null
+    test "$(grep -c '^grit-check:' "$TMPDIR/aggregate-clean.out")" -eq 1
+    grep -Fx 'grit-check: ok (profile tests: 2; gated scans: 1)' \
+      "$TMPDIR/aggregate-clean.out" >/dev/null
+
+    echo 'test: all failing gated profiles run with one copy of each diagnostic'
+    mkdir "$TMPDIR/aggregate-violation"
+    cp -R ${fixtureRoot + "/violation"}/. "$TMPDIR/aggregate-violation/"
+    chmod -R u+w "$TMPDIR/aggregate-violation"
+    cp -R "$TMPDIR/aggregate-violation" "$TMPDIR/aggregate-violation-before"
+    cd "$TMPDIR/aggregate-violation"
+    set +e
+    ${aggregateViolationProject.apps.grit-check.program} >"$TMPDIR/aggregate-fail.out" 2>&1
+    status=$?
+    set -e
+    test "$status" -eq 1
+    grep -F '[grit:css-policy:check]' "$TMPDIR/aggregate-fail.out" | \
+      grep -F 'example.css' >/dev/null
+    grep -F '[grit:yaml-policy:check]' "$TMPDIR/aggregate-fail.out" | \
+      grep -F 'example.yaml' >/dev/null
+    grep -F '[grit:css-policy:check]' "$TMPDIR/aggregate-fail.out" | \
+      grep -F '2:5' | grep -F 'match' | \
+      grep -F 'Legacy colors bypass the approved design-token palette.' | \
+      grep -F 'no_legacy_css' >/dev/null
+    grep -F '[grit:yaml-policy:check]' "$TMPDIR/aggregate-fail.out" | \
+      grep -F '1:1' | grep -F 'rewrite' | \
+      grep -F 'Replace the legacy data key while preserving its value and surrounding comments.' | \
+      grep -F 'replace_legacy_yaml' >/dev/null
+    grep -Fx '[grit:ungated:test] passed' "$TMPDIR/aggregate-fail.out" >/dev/null
+    ! grep -F '[grit:ungated:check]' "$TMPDIR/aggregate-fail.out" >/dev/null
+    ! grep -E '^\[grit:[^]]+\] $' "$TMPDIR/aggregate-fail.out" >/dev/null
+    test "$(grep -Fc 'example.css' "$TMPDIR/aggregate-fail.out")" -eq 1
+    test "$(grep -Fc 'example.yaml' "$TMPDIR/aggregate-fail.out")" -eq 1
+    test "$(grep -c '^grit-check:' "$TMPDIR/aggregate-fail.out")" -eq 1
+    grep -Fx \
+      'grit-check: failed (policy failures: 2; pattern-test failures: 0; runner errors: 0)' \
+      "$TMPDIR/aggregate-fail.out" >/dev/null
+    diff -qr "$TMPDIR/aggregate-violation-before" "$TMPDIR/aggregate-violation"
+
+    echo 'test: a wrong embedded expectation fails read-only'
+    pattern_before=$(sha256sum ${brokenPatterns + "/wrong_rewrite.md"})
+    set +e
+    ${brokenProject.apps.grit-broken-test.program} >"$TMPDIR/broken-test.out" 2>&1
+    status=$?
+    set -e
+    test "$status" -ne 0
+    grep -F 'wrong_rewrite' "$TMPDIR/broken-test.out" >/dev/null
+    grep -F 'Rejects an incorrect expected rewrite' "$TMPDIR/broken-test.out" >/dev/null
+    test "$pattern_before" = "$(sha256sum ${brokenPatterns + "/wrong_rewrite.md"})"
+
+    set +e
+    ${brokenProject.apps.lint.program} >"$TMPDIR/broken-lint.out" 2>&1
+    status=$?
+    set -e
+    test "$status" -ne 0
+    grep -F '[grit:broken:test]' "$TMPDIR/broken-lint.out" >/dev/null
+    grep -F 'wrong_rewrite' "$TMPDIR/broken-lint.out" >/dev/null
+    grep -Fx \
+      'grit-check: failed (policy failures: 0; pattern-test failures: 1; runner errors: 0)' \
+      "$TMPDIR/broken-lint.out" >/dev/null
+    test "$pattern_before" = "$(sha256sum ${brokenPatterns + "/wrong_rewrite.md"})"
+
+    set +e
+    ${brokenProject.apps.validate.program} >"$TMPDIR/broken-validate.out" 2>&1
+    status=$?
+    set -e
+    test "$status" -ne 0
+    grep -F '[grit:broken:test]' "$TMPDIR/broken-validate.out" >/dev/null
+    grep -F 'wrong_rewrite' "$TMPDIR/broken-validate.out" >/dev/null
+    test "$pattern_before" = "$(sha256sum ${brokenPatterns + "/wrong_rewrite.md"})"
+
+    set +e
+    ${cleanProject.apps.grit-policy-test.program} --update >"$TMPDIR/test-args.out" 2>&1
+    status=$?
+    set -e
+    test "$status" -eq 2
+    grep -F 'runtime arguments are not supported' "$TMPDIR/test-args.out" >/dev/null
+
     echo 'test: clean repository and explicit outputs'
-    test -e ${cleanProject.checks.grit-main}
-    test -x ${cleanProject.apps.grit-main-check.program}
-    test -x ${cleanProject.apps.grit-main-apply.program}
+    test -e ${cleanProject.checks.grit-policy}
+    test -x ${cleanProject.apps.grit-policy-check.program}
+    test -x ${cleanProject.apps.grit-policy-apply.program}
+    test -x ${cleanProject.apps.grit-codemod-check.program}
+    test -x ${cleanProject.apps.grit-codemod-apply.program}
+    cd ${fixtureRoot + "/clean"}
+    ${cleanProject.apps.grit-policy-check.program}
+    ${cleanProject.apps.grit-codemod-check.program}
 
-    echo 'test: named profiles preserve gates and output names'
-    test -e ${profiledProject.checks.grit-policy}
-    test -x ${profiledProject.apps.grit-policy-check.program}
-    test -x ${profiledProject.apps.grit-policy-apply.program}
-    test -x ${profiledProject.apps.grit-rename-data-check.program}
-    test -x ${profiledProject.apps.grit-rename-data-apply.program}
+    echo 'test: normal lint gates policies and every profile pattern test'
+    mkdir "$TMPDIR/clean-gate"
+    cp -R ${fixtureRoot + "/clean"}/. "$TMPDIR/clean-gate/"
+    chmod -R u+w "$TMPDIR/clean-gate"
+    cd "$TMPDIR/clean-gate"
+    ${cleanProject.apps.lint.program} >"$TMPDIR/clean-lint.out" 2>&1
+    grep -Fx '[grit:policy:test] passed' "$TMPDIR/clean-lint.out" >/dev/null
+    grep -Fx '[grit:codemod:test] passed' "$TMPDIR/clean-lint.out" >/dev/null
+    grep -Fx '[grit:policy:check] passed' "$TMPDIR/clean-lint.out" >/dev/null
+    ! grep -F '[grit:codemod:check]' "$TMPDIR/clean-lint.out" >/dev/null
+    test "$(grep -c '^grit-check:' "$TMPDIR/clean-lint.out")" -eq 1
+    ! grep -F '=== /nix/store/' "$TMPDIR/clean-lint.out" >/dev/null
 
-    echo 'test: read-only violation check'
-    mkdir "$TMPDIR/read-only"
-    cp -R ${fixtureRoot + "/violation"}/. "$TMPDIR/read-only/"
-    chmod -R u+w "$TMPDIR/read-only"
-    cd "$TMPDIR/read-only/source one"
-    if ${violationProject.apps.grit-main-check.program} >"$TMPDIR/check.out" 2>&1; then
-      echo 'expected the violation check to fail' >&2
-      exit 1
-    fi
-    grep -F 'example.css' "$TMPDIR/check.out" >/dev/null
-    grep -F 'example.yaml' "$TMPDIR/check.out" >/dev/null
-    if grep -F 'excluded.yaml' "$TMPDIR/check.out" >/dev/null; then
-      echo 'excluded path unexpectedly appeared in diagnostics' >&2
-      exit 1
-    fi
-    diff -qr ${fixtureRoot + "/violation"} "$TMPDIR/read-only"
-
-    echo 'test: apps reject runtime behavior and scope overrides'
+    echo 'test: match-only policy reports its explanation without modifying source'
+    mkdir "$TMPDIR/policy"
+    cp -R ${fixtureRoot + "/violation"}/. "$TMPDIR/policy/"
+    chmod -R u+w "$TMPDIR/policy"
+    cp -R "$TMPDIR/policy" "$TMPDIR/policy-before"
+    cd "$TMPDIR/policy/source one"
     set +e
-    ${violationProject.apps.grit-main-check.program} --help >"$TMPDIR/runtime-help.out" 2>&1
+    ${violationProject.apps.grit-policy-check.program} >"$TMPDIR/policy.out" 2>&1
     status=$?
     set -e
-    test "$status" -eq 2
-    grep -F 'runtime arguments are not supported' "$TMPDIR/runtime-help.out" >/dev/null
-    diff -qr ${fixtureRoot + "/violation"} "$TMPDIR/read-only"
+    test "$status" -ne 0
+    grep -F 'example.css' "$TMPDIR/policy.out" >/dev/null
+    grep -F 'Legacy colors bypass the approved design-token palette.' "$TMPDIR/policy.out" >/dev/null
+    grep -F 'match' "$TMPDIR/policy.out" >/dev/null
+    grep -F 'no_legacy_css' "$TMPDIR/policy.out" >/dev/null
+    ! grep -F 'Fix available.' "$TMPDIR/policy.out" >/dev/null
+    diff -qr "$TMPDIR/policy-before" "$TMPDIR/policy"
 
+    echo 'test: codemod check covers two patterns and two scoped directories'
+    cd "$TMPDIR/policy"
     set +e
-    ${violationProject.apps.grit-main-apply.program} source-two >"$TMPDIR/runtime-scope.out" 2>&1
+    ${violationProject.apps.grit-codemod-check.program} >"$TMPDIR/codemod.out" 2>&1
     status=$?
     set -e
-    test "$status" -eq 2
-    grep -F 'runtime arguments are not supported' "$TMPDIR/runtime-scope.out" >/dev/null
-    diff -qr ${fixtureRoot + "/violation"} "$TMPDIR/read-only"
+    test "$status" -ne 0
+    for diagnostic in \
+      example.css \
+      example.yaml \
+      'Replace legacy colors with the approved design-token value.' \
+      'Replace the legacy data key while preserving its value and surrounding comments.' \
+      replace_legacy_css \
+      replace_legacy_yaml \
+      'Fix available.'
+    do
+      grep -F "$diagnostic" "$TMPDIR/codemod.out" >/dev/null
+    done
+    ! grep -F 'excluded.yaml' "$TMPDIR/codemod.out" >/dev/null
+    diff -qr "$TMPDIR/policy-before" "$TMPDIR/policy"
 
-    echo 'test: scope ignores ambient Git ignore state'
+    echo 'test: ambient ignore state cannot narrow configured scope'
     mkdir "$TMPDIR/ignore-scope"
     cp -R ${fixtureRoot + "/violation"}/. "$TMPDIR/ignore-scope/"
     chmod -R u+w "$TMPDIR/ignore-scope"
@@ -188,30 +427,44 @@ toolPkgs.runCommandLocal "grit-consumer"
     HOME="$TMPDIR/ignore-home" git config --global \
       core.excludesFile "$TMPDIR/ignore-home/global-ignore"
     printf '%s\n' 'example.yaml' >"$TMPDIR/ignore-scope/.git/info/exclude"
-    printf '%s\n' 'source one' >"$TMPDIR/.ignore"
+    printf '%s\n' 'example.css' >"$TMPDIR/ignore-scope/.ignore"
     cp -R "$TMPDIR/ignore-scope" "$TMPDIR/ignore-before"
-
-    cd "$TMPDIR/ignore-scope/source one"
-    if HOME="$TMPDIR/ignore-home" \
-      ${violationProject.apps.grit-main-check.program} >"$TMPDIR/ignore-check.out" 2>&1
-    then
-      echo 'ambient ignore state hid Grit violations' >&2
-      exit 1
-    fi
-    grep -F 'example.css' "$TMPDIR/ignore-check.out" >/dev/null
-    grep -F 'example.yaml' "$TMPDIR/ignore-check.out" >/dev/null
+    cd "$TMPDIR/ignore-scope"
+    set +e
+    HOME="$TMPDIR/ignore-home" \
+      ${violationProject.apps.grit-codemod-check.program} >"$TMPDIR/ignore.out" 2>&1
+    status=$?
+    set -e
+    test "$status" -ne 0
+    grep -F 'example.css' "$TMPDIR/ignore.out" >/dev/null
+    grep -F 'example.yaml' "$TMPDIR/ignore.out" >/dev/null
+    ! grep -F 'excluded.yaml' "$TMPDIR/ignore.out" >/dev/null
     diff -qr "$TMPDIR/ignore-before" "$TMPDIR/ignore-scope"
 
-    echo 'test: explicit golden codemod'
+    echo 'test: normal lint reports the gated policy without applying it'
+    cd "$TMPDIR/policy/source one"
+    set +e
+    ${violationProject.apps.lint.program} >"$TMPDIR/lint.out" 2>&1
+    status=$?
+    set -e
+    test "$status" -ne 0
+    grep -F '[grit:policy:test] passed' "$TMPDIR/lint.out" >/dev/null
+    grep -F '[grit:codemod:test] passed' "$TMPDIR/lint.out" >/dev/null
+    grep -F '[grit:policy:check] policy violations found' "$TMPDIR/lint.out" >/dev/null
+    ! grep -F '[grit:codemod:check]' "$TMPDIR/lint.out" >/dev/null
+    test "$(grep -c '^grit-check:' "$TMPDIR/lint.out")" -eq 1
+    diff -qr --exclude=.tmp "$TMPDIR/policy-before" "$TMPDIR/policy"
+
+    echo 'test: explicit apply matches golden output'
     mkdir "$TMPDIR/apply"
     cp -R ${fixtureRoot + "/violation"}/. "$TMPDIR/apply/"
     chmod -R u+w "$TMPDIR/apply"
-    cd "$TMPDIR/apply/source one"
-    ${violationProject.apps.grit-main-apply.program}
+    cd "$TMPDIR/apply"
+    ${violationProject.apps.grit-codemod-apply.program}
     diff -qr ${fixtureRoot + "/golden"} "$TMPDIR/apply"
-    ${violationProject.apps.grit-main-check.program}
+    ${violationProject.apps.grit-codemod-check.program}
 
-    echo 'test: package and nix-tools tool-set passthrough'
+    echo 'test: supplied Grit package and nix-tools fd are honored'
     export FAKE_GRIT_MARKER="$TMPDIR/fake-grit"
     export CUSTOM_FD_MARKER="$TMPDIR/custom-fd"
     export FAKE_GRIT_STATUS=23
@@ -223,6 +476,140 @@ toolPkgs.runCommandLocal "grit-consumer"
     test "$status" -eq 23
     test -e "$FAKE_GRIT_MARKER"
     test -e "$CUSTOM_FD_MARKER"
+    test "$(tail -n 1 "$CUSTOM_FD_MARKER")" = 'source one'
+    grep -Fx -- '--ignore-file' "$CUSTOM_FD_MARKER" >/dev/null
+
+    echo 'test: selector failures retain their exit status and stop before Grit'
+    export CUSTOM_FD_STATUS=47
+    export FAKE_GRIT_MARKER="$TMPDIR/grit-must-not-run"
+    set +e
+    ${overriddenProject.apps.grit-main-check.program}
+    status=$?
+    set -e
+    test "$status" -eq 47
+    test ! -e "$FAKE_GRIT_MARKER"
+
+    echo 'test: overlapping target roots pass every file to Grit once'
+    unset CUSTOM_FD_STATUS FAKE_GRIT_STATUS
+    mkdir "$TMPDIR/overlap"
+    cp -R ${fixtureRoot + "/clean"}/. "$TMPDIR/overlap/"
+    chmod -R u+w "$TMPDIR/overlap"
+    cd "$TMPDIR/overlap"
+    : > "$FAKE_GRIT_MARKER"
+    ${overlappingProject.apps.grit-main-check.program}
+    printf -v target_arg '%q' "$PWD/source one/example.css"
+    test "$(grep -oF "$target_arg" "$FAKE_GRIT_MARKER" | wc -l)" -eq 1
+
+    echo 'test: a missing live target is a runner failure, not a policy violation'
+    mkdir "$TMPDIR/missing-target"
+    cp -R ${fixtureRoot + "/clean"}/. "$TMPDIR/missing-target/"
+    chmod -R u+w "$TMPDIR/missing-target"
+    mv "$TMPDIR/missing-target/source one" "$TMPDIR/missing-target/source removed"
+    cd "$TMPDIR/missing-target"
+    : > "$FAKE_GRIT_MARKER"
+    : > "$CUSTOM_FD_MARKER"
+    set +e
+    ${overriddenProject.apps.grit-check.program} >"$TMPDIR/missing-target.out" 2>&1
+    status=$?
+    set -e
+    test "$status" -eq 2
+    grep -F '[grit:main:check] runner failed with status 2' \
+      "$TMPDIR/missing-target.out" >/dev/null
+    grep -Fx \
+      'grit-check: failed (policy failures: 0; pattern-test failures: 0; runner errors: 1)' \
+      "$TMPDIR/missing-target.out" >/dev/null
+
+    echo 'test: a missing project root marker is a runner failure'
+    mkdir "$TMPDIR/no-root"
+    cd "$TMPDIR/no-root"
+    set +e
+    ${overriddenProject.apps.grit-check.program} >"$TMPDIR/no-root.out" 2>&1
+    status=$?
+    set -e
+    test "$status" -eq 2
+    grep -F "could not find project root marker 'flake.nix'" "$TMPDIR/no-root.out" >/dev/null
+    grep -Fx \
+      'grit-check: failed (policy failures: 0; pattern-test failures: 0; runner errors: 1)' \
+      "$TMPDIR/no-root.out" >/dev/null
+
+    echo 'test: aggregate distinguishes runner failures'
+    cd ${fixtureRoot + "/clean"}
+    : > "$FAKE_GRIT_MARKER"
+    export FAKE_GRIT_STATUS=23
+    set +e
+    ${overriddenProject.apps.grit-check.program} >"$TMPDIR/aggregate-runner.out" 2>&1
+    status=$?
+    set -e
+    test "$status" -eq 2
+    grep -F '[grit:main:test] runner failed with status 23' \
+      "$TMPDIR/aggregate-runner.out" >/dev/null
+    grep -F '[grit:main:check] runner failed with status 23' \
+      "$TMPDIR/aggregate-runner.out" >/dev/null
+    grep -Fx \
+      'grit-check: failed (policy failures: 0; pattern-test failures: 0; runner errors: 2)' \
+      "$TMPDIR/aggregate-runner.out" >/dev/null
+
+    echo 'test: read-only paths never pass the apply flag'
+    unset FAKE_GRIT_STATUS
+    : > "$FAKE_GRIT_MARKER"
+    mkdir "$TMPDIR/no-apply"
+    cp -R ${fixtureRoot + "/clean"}/. "$TMPDIR/no-apply/"
+    chmod -R u+w "$TMPDIR/no-apply"
+    cd "$TMPDIR/no-apply"
+    ${noApplyProject.apps.grit-main-test.program}
+    ${noApplyProject.apps.grit-main-check.program}
+    ${noApplyProject.apps.grit-check.program}
+    ${noApplyProject.apps.lint.program}
+    ${noApplyProject.apps.validate.program}
+    mkdir "$TMPDIR/format-no-apply"
+    cp -R ${./fixtures/fmt/grit/in}/. "$TMPDIR/format-no-apply/"
+    chmod -R u+w "$TMPDIR/format-no-apply"
+    export HOME="$TMPDIR/format-home"
+    mkdir "$HOME"
+    cd "$TMPDIR/format-no-apply"
+    ${noApplyFormatProject.apps.format.program}
+    ! grep -F -- '--fix' "$FAKE_GRIT_MARKER" >/dev/null
+
+    echo 'test: aggregate retains real Grit color on a terminal and respects NO_COLOR'
+    cd "$TMPDIR/aggregate-violation"
+    ! grep -F $'\033[' "$TMPDIR/aggregate-fail.out" >/dev/null
+    set +e
+    env -u NO_COLOR -u CLICOLOR_FORCE script --quiet --return \
+      --command ${lib.escapeShellArg aggregateViolationProject.apps.grit-check.program} \
+      "$TMPDIR/aggregate-color.out" >/dev/null
+    status=$?
+    set -e
+    test "$status" -eq 1
+    grep -F $'\033[2m[grit:css-policy:test]\033[0m \033[32mpassed\033[0m' \
+      "$TMPDIR/aggregate-color.out" >/dev/null
+    grep -F $'\033[2m[grit:css-policy:check]\033[0m \033[' \
+      "$TMPDIR/aggregate-color.out" >/dev/null
+    grep -F $'\033[2m[grit:yaml-policy:check]\033[0m \033[' \
+      "$TMPDIR/aggregate-color.out" >/dev/null
+    grep -F $'\033[2mgrit-check: failed (policy failures: 2; pattern-test failures: 0; runner errors: 0)\033[0m' \
+      "$TMPDIR/aggregate-color.out" >/dev/null
+
+    set +e
+    CLICOLOR_FORCE=1 ${aggregateViolationProject.apps.grit-check.program} \
+      >"$TMPDIR/aggregate-forced-color.out" 2>&1
+    status=$?
+    set -e
+    test "$status" -eq 1
+    grep -F $'\033[2m[grit:css-policy:check]\033[0m \033[' \
+      "$TMPDIR/aggregate-forced-color.out" >/dev/null
+    ! grep -F ' running' "$TMPDIR/aggregate-forced-color.out" >/dev/null
+
+    set +e
+    NO_COLOR=1 CLICOLOR_FORCE=1 script --quiet --return \
+      --command ${lib.escapeShellArg aggregateViolationProject.apps.grit-check.program} \
+      "$TMPDIR/aggregate-no-color.out" >/dev/null
+    status=$?
+    set -e
+    test "$status" -eq 1
+    ! grep -F $'\033[' "$TMPDIR/aggregate-no-color.out" >/dev/null
+
+    echo 'test: aggregate app excludes consumer validation build closures'
+    test -e ${aggregateClosure}
 
     touch "$out"
   ''
