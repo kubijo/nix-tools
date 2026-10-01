@@ -8,6 +8,8 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-01
+
 ### Added
 
 - Salt/Jinja linting via `lint.salt` and explicit EditorConfig whitespace formatting/checking, with isolated policy
