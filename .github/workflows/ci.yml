@@ -16,6 +16,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   hygiene:
     runs-on: ubuntu-latest
@@ -39,8 +42,17 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: DeterminateSystems/determinate-nix-action@v3
-      - run: nix flake check -L --keep-going
-      - run: nix flake show --all-systems
+        with:
+          # runCommandLocal checks otherwise refuse cached build results.
+          extra-conf: |
+            always-allow-substitutes = true
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
+        with:
+          use-gha-cache: enabled
+          use-flakehub: disabled
+          diagnostic-endpoint: ""
+      - run: nix flake check -L --keep-going --no-update-lock-file
+      - run: nix flake show --all-systems --no-update-lock-file
 
   # Determinate alone would leave upstream nix, which most consumers run, untested.
   compat:
@@ -51,7 +63,14 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - run: nix flake check -L --keep-going
+            always-allow-substitutes = false
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
+        with:
+          use-gha-cache: enabled
+          use-flakehub: disabled
+          diagnostic-endpoint: ""
+      # Reuse dependencies, but execute runCommandLocal checks under upstream Nix.
+      - run: nix flake check -L --keep-going --no-update-lock-file --option always-allow-substitutes false
 
   drift:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -59,7 +78,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: DeterminateSystems/determinate-nix-action@v3
+        with:
+          extra-conf: |
+            always-allow-substitutes = true
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
+        with:
+          use-gha-cache: enabled
+          use-flakehub: disabled
+          diagnostic-endpoint: ""
       - run: nix flake update
-      - run: nix flake check -L --keep-going
+      - run: nix flake check -L --keep-going --no-update-lock-file
       # `flake check` skips systems it cannot build, so a dropped platform only shows here.
-      - run: nix flake show --all-systems
+      - run: nix flake show --all-systems --no-update-lock-file

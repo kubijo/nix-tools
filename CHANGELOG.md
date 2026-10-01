@@ -24,6 +24,10 @@ for this library `nix flake update` is a semantic change.
 
 ### Fixed
 
+- CI now caches Nix build results in GitHub Actions and permits result substitution in normal and drift checks. The
+  upstream-Nix compatibility job caches dependencies while still executing its checks. Check commands reject implicit
+  lock-file updates.
+
 - Search-root validation now distinguishes missing optional directories from filesystem errors. Inaccessible parents,
   symlink loops, and non-directory roots fail lint and coverage instead of silently skipping discovery.
 
