@@ -1,0 +1,4 @@
+Version: 5
+
+Source: https://example.org/releases/
+Matching-Pattern: example-@ANY_VERSION@@ARCHIVE_EXT@

@@ -1,0 +1,5 @@
+[formatter]
+use-tabs = true
+
+[linter.rules.strict-types]
+level = "error"

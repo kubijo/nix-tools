@@ -1,0 +1,3 @@
+Tests: smoke
+Depends: zlib1g, @, bash
+Restrictions: superficial, allow-stderr

@@ -1,0 +1,6 @@
+# Jinja templates can render JSON or systemd units as well as Salt states.
+rules:
+  205:
+    ignore: |
+      *.j2
+      *.jinja

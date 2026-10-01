@@ -8,7 +8,46 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+### Added
+
+- Salt/Jinja linting via `lint.salt` and explicit EditorConfig whitespace formatting/checking, with isolated policy
+  resolution and formatter cache invalidation.
+
+- A tracked-source coverage audit app with exact formatter/file-checker selection, declared project-test scopes,
+  reasoned exceptions, whitespace classification, and Git-flake source omission reporting.
+
+- Opt-in PHP formatting and linting through Mago, including `.inc` files, native configuration overrides, and a
+  documented syntax/semantic sanity-check mode.
+
+- Opt-in Debian metadata formatting and project linting through pinned debputy, with native configuration overrides,
+  scoped diagnostics and writes, hermetic dependencies, and integration tests.
+
 ### Fixed
+
+- Search-root validation now distinguishes missing optional directories from filesystem errors. Inaccessible parents,
+  symlink loops, and non-directory roots fail lint and coverage instead of silently skipping discovery.
+
+- Unreadable directories and other fd traversal diagnostics now fail checker, coverage, and Debian discovery even when
+  fd returns zero, instead of silently accepting a partial file list.
+
+- Preserved literal commas and brace alternatives in lint includes, deduplicated overlapping matches, and failed
+  discovery before checking partial results when a later glob is invalid.
+
+- Fixed single custom search roots and normalized discovered paths in the coverage report.
+
+- Rejected native whitespace exclusion flags that could match temporary filenames and silently skip source files;
+  tool-level `exclude` options continue to select repository paths.
+
+- Whitespace lint rejects fixing flags that could hide violations by repairing only a temporary copy. Whitespace
+  policies require a Nix path or derivation output so mutable runtime paths cannot bypass formatter cache invalidation.
+
+- Checker discovery errors now fail both batch and per-file runs; partial discovery output is never processed.
+
+- File checkers disconnect stdin by default, with explicit `stdin = "inherit"` opt-in. Slash-containing lint include
+  globs now fail at evaluation with basename-glob guidance.
+
+- Matched the Biome schema to the working tool pin and excluded the Grit apply runner's cache from its golden
+  comparison.
 
 - Made the Grit terminal-color regression test portable across Linux and macOS by using nixpkgs' platform-specific
   `script` executable and command syntax.

@@ -59,6 +59,7 @@ in
   validate ? { },
   # Shared, hermetic preparation for the formatting and linting check derivations.
   check ? { },
+  coverage ? { },
 }:
 let
   checkArgs = checkOptions check;
@@ -185,6 +186,23 @@ let
     // validate
   );
 
+  coverageReport = import ./coverage.nix { inherit lib toolPkgs; } {
+    inherit formatter src treeRootFile;
+    checker = fileChecker;
+    config = coverage;
+    customCheckers = lib.attrNames (lint.extraCheckers or { });
+    customFormatters = lib.attrNames (format.extraFormatters or { });
+    debian =
+      (toggle (import ./options.nix { inherit lib; }).debianCheckerOptions (lint.debian or false)).enable
+      && !((lint.extraProjectCheckers or { }) ? debian);
+    projectNames =
+      map (spec: "lint:${spec.name}") fileChecker.selection.projectCheckers
+      ++ map (step: "validate:${if lib.isString step then step else step.name or step.run}") (
+        validate.steps or [ ]
+      )
+      ++ map (step: "lint:${step.name}") structuralLintSteps;
+  };
+
   misplaced = owned: cfg: lib.intersectLists owned (lib.attrNames cfg);
 
   runnable = drv: {
@@ -216,6 +234,7 @@ assert lib.assertMsg (misplaced gateOwned validate == [ ])
     format = runnable formatter;
     lint = runnable checker;
     validate = runnable gate;
+    coverage = runnable coverageReport;
   }
   // lib.optionalAttrs grit.enable gritProject.apps
   // lib.optionalAttrs astGrep.enable astGrepProject.apps;
@@ -239,6 +258,7 @@ assert lib.assertMsg (misplaced gateOwned validate == [ ])
     formatter
     checker
     gate
+    coverageReport
   ]
   ++ lib.optional (nodejs != null) nodejs;
 }

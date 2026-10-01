@@ -26,6 +26,10 @@ in
   inherit (options) defaultExcludes;
 
   conf = {
+    salt-lint = ../conf/salt-lint.yaml;
+    editorconfig = ../conf/editorconfig;
+    mago = ../conf/mago.toml;
+    debputy = ../conf/debputy.yaml;
     biome = ../conf/biome.json;
     taplo = ../conf/taplo.toml;
     yamlfmt = ../conf/yamlfmt.yml;

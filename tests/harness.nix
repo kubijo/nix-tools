@@ -9,6 +9,13 @@
   publicLib,
 }:
 let
+  inherit (builtins)
+    deepSeq
+    functionArgs
+    lessThan
+    seq
+    tryEval
+    ;
   # A fixture directory is no git checkout, so treefmt needs a root marker. Deleted before
   # capture, so no golden carries it.
   marker = ".fixture-root";
@@ -43,6 +50,8 @@ let
     po = "gettext";
     protobuf = "buf";
     python = "ruff";
+    php = "mago";
+    debian = "callPackage";
     sql = "sqlfluff";
     xml = "libxml2";
     grit = "callPackage";
@@ -195,9 +204,7 @@ rec {
         );
 
       # A poison its language no longer reaches would cover nothing, so each must still bite.
-      reaches =
-        toggle:
-        !(builtins.tryEval (builtins.seq (formatterWith { ${toggle} = true; }).outPath true)).success;
+      reaches = toggle: !(tryEval (seq (formatterWith { ${toggle} = true; }).outPath true)).success;
       stale = lib.attrNames (lib.filterAttrs (toggle: _: !reaches toggle) poisonedBy);
     in
     assert lib.assertMsg (
@@ -510,11 +517,10 @@ rec {
   strictSchemas =
     let
       schemas = import ../lib/options.nix { inherit lib; };
-      hasExactly =
-        schema: names: lib.attrNames (builtins.functionArgs schema) == lib.sort builtins.lessThan names;
+      hasExactly = schema: names: lib.attrNames (functionArgs schema) == lib.sort lessThan names;
       rejectsCollision =
-        !(builtins.tryEval (
-          builtins.deepSeq (checkerFor {
+        !(tryEval (
+          deepSeq (checkerFor {
             extraProjectCheckers.nix.command = "false";
           }) true
         )).success;
@@ -592,8 +598,8 @@ rec {
   unsupportedSystem =
     let
       rejected =
-        !(builtins.tryEval (
-          builtins.deepSeq (publicLib.configure {
+        !(tryEval (
+          deepSeq (publicLib.configure {
             system = "x86_64-darwin";
             inherit toolPkgs;
             src = ./.;

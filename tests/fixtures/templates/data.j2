@@ -1,0 +1,7 @@
+{
+  "names": [
+{%- for item in names %}
+    "{{ item }}"{% if not loop.last %},{% endif %}
+{%- endfor %}
+  ]
+}

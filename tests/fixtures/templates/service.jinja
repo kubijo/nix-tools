@@ -1,0 +1,7 @@
+[Unit]
+Description={{ name }}
+{% if enabled -%}
+[Service]
+Type=oneshot
+ExecStart=/bin/true
+{% endif -%}

@@ -23,6 +23,52 @@ let
   };
 
   defaults = {
+    salt = {
+      package = toolPkgs.salt-lint;
+      binary = "salt-lint";
+      options = [ "--nocolor" ];
+      configFile = ../conf/salt-lint.yaml;
+      configFlag = configFlagged "-c";
+      includes = [
+        "*.sls"
+        "*.j2"
+        "*.jinja"
+      ];
+      batch = true;
+    };
+    whitespace = {
+      package = toolPkgs.editorconfig-checker;
+      binary = "editorconfig-checker";
+      mkCommand =
+        exe:
+        writeShellScript "whitespace-check" ''
+          exec ${lib.getExe (import ./whitespace.nix { inherit toolPkgs; })} ${exe} "$@"
+        '';
+      options = [ "check" ];
+      configFile = ../conf/editorconfig;
+      configFlag = import ./whitespace-policy.nix { inherit lib; };
+      includes = [
+        "*.sls"
+        "*.j2"
+        "*.jinja"
+      ];
+      batch = true;
+    };
+
+    php = {
+      package = toolPkgs.mago;
+      binary = "mago";
+      options = [ "lint" ];
+      configFile = ../conf/mago.toml;
+      configFlag = configFlagged "--config";
+      configFirst = true;
+      includes = [
+        "*.php"
+        "*.inc"
+      ];
+      batch = true;
+    };
+
     nix = {
       includes = [ "*.nix" ];
       # Short-circuiting would hide every deadnix finding behind an unrelated statix one.
@@ -191,8 +237,15 @@ let
       configFile = if opts.configFile != null then opts.configFile else def.configFile or null;
 
       argv =
-        (def.options or [ ])
-        ++ lib.optionals (configFile != null) (def.configFlag configFile)
+        (
+          let
+            configArgs = lib.optionals (configFile != null) (def.configFlag configFile);
+          in
+          if def.configFirst or false then
+            configArgs ++ (def.options or [ ])
+          else
+            (def.options or [ ]) ++ configArgs
+        )
         ++ (def.mkOptions or (_: [ ])) opts;
     in
     assert lib.assertMsg (
@@ -203,8 +256,9 @@ let
     ) "${name}: this checker requires `configFile`";
     {
       inherit name;
+      inherit (opts) stdin;
       command = if def ? mkCommand then def.mkCommand exe else exe;
-      options = argv ++ opts.extraOptions;
+      options = argv ++ opts.extraOptions ++ lib.optional (name == "whitespace") "--";
       includes = if opts.includes != null then opts.includes else def.includes;
       excludes = opts.exclude;
       searchPaths = def.searchPaths or [ "." ];
