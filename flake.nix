@@ -53,6 +53,13 @@
           inherit system;
           src = self;
           inherit (import ./nix/self.nix) exclude;
+          format.python = true;
+          format.whitespace.includes = [
+            "conf/editorconfig"
+            "tests/conf/editorconfig"
+            "tests/conf/editorconfig-sections"
+          ];
+          lint.python = true;
         }
       );
 

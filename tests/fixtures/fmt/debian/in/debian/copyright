@@ -1,0 +1,7 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: example
+
+Files: zzz aaa
+Copyright: 2026 Example Team
+License: MIT
+ Permission is hereby granted to test this fixture.

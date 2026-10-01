@@ -4,6 +4,7 @@
   toolPkgsFor,
 }:
 let
+  inherit (builtins) getContext length;
   options = import ./options.nix { inherit lib; };
   inherit (options)
     toggle
@@ -46,6 +47,9 @@ in
   # instead of formatting it with a toolchain the repo never chose.
   rust ? false,
   python ? false,
+  php ? false,
+  debian ? false,
+  whitespace ? false,
   javascript ? false,
   typescript ? false,
   css ? false,
@@ -97,7 +101,7 @@ let
           value = "${input}";
         in
         assert lib.assertMsg (
-          builtins.getContext value != { }
+          getContext value != { }
         ) "extra formatter: ${label} must be a Nix path or derivation output";
         value;
       command = contextual "`command`" resolved.command;
@@ -108,10 +112,10 @@ let
       command = customFormatter;
       options = [
         command
-        (toString (builtins.length toolOptions))
+        (toString (length toolOptions))
       ]
       ++ toolOptions
-      ++ [ (toString (builtins.length resolved.cacheInputs)) ]
+      ++ [ (toString (length resolved.cacheInputs)) ]
       ++ map (contextual "`cacheInputs` entries") resolved.cacheInputs;
     };
 
@@ -127,6 +131,9 @@ let
         justfile
         rust
         python
+        php
+        whitespace
+        debian
         css
         html
         graphql
@@ -192,7 +199,10 @@ lib.warnIf (onUnmatched == "error")
       runtimeEnv.PATH = null;
       excludeShellChecks = [ "SC2123" ];
       # Carried forward so a dev shell or validate step reuses it instead of adding a second.
-      passthru = { inherit nodejs; };
+      passthru = {
+        inherit nodejs;
+        selection = { inherit formatters excludes; };
+      };
       # Searches upward for the marker, so a subdirectory and a sandbox copy both work.
       # Without it, `--walk auto` outside a git repo roots at the config file: /nix/store.
       text = ''

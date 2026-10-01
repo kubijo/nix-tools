@@ -6,6 +6,12 @@
   api,
 }:
 let
+  inherit (builtins)
+    fromJSON
+    pathExists
+    readDir
+    readFile
+    ;
   # Straight from the modules, not through `lib`: these are the internals the public
   # entrypoint is built from, and the suite exists to hold each one on its own.
   toolPkgsFor = _: toolPkgs;
@@ -26,8 +32,7 @@ let
   chkFixtures = ./fixtures/chk;
 
   # Discovered, never listed: a hand-maintained roster is how a fixture ends up orphaned.
-  namesIn =
-    dir: lib.attrNames (lib.filterAttrs (_: type: type == "directory") (builtins.readDir dir));
+  namesIn = dir: lib.attrNames (lib.filterAttrs (_: type: type == "directory") (readDir dir));
 
   # Optional per-fixture arguments; most fixtures need none.
   # A case needing a runtime takes the function form,
@@ -38,7 +43,7 @@ let
       case = ./cases + "/${kind}/${name}.nix";
       value = import case;
     in
-    if !builtins.pathExists case then
+    if !pathExists case then
       { }
     else if lib.isFunction value then
       value { inherit toolPkgs; }
@@ -47,7 +52,7 @@ let
 
   fmtNames = namesIn fmtFixtures;
   chkNames = namesIn chkFixtures;
-  lock = builtins.fromJSON (builtins.readFile ../flake.lock);
+  lock = fromJSON (readFile ../flake.lock);
   hasNestedNixTools = lib.any (
     node:
     let
@@ -65,6 +70,15 @@ let
       ;
   };
   astGrepConsumer = import ./ast-grep.nix {
+    inherit
+      api
+      lib
+      system
+      toolPkgs
+      ;
+  };
+
+  phpDebian = import ./php-debian.nix {
     inherit
       api
       lib
@@ -95,6 +109,31 @@ rec {
   checks =
     lib.listToAttrs (lib.concatMap fmtCheck fmtNames)
     // lib.listToAttrs (map chkCheck chkNames)
+    // phpDebian
+    // import ./runner.nix {
+      inherit
+        api
+        lib
+        system
+        toolPkgs
+        ;
+    }
+    // import ./templates.nix {
+      inherit
+        api
+        lib
+        system
+        toolPkgs
+        ;
+    }
+    // import ./coverage.nix {
+      inherit
+        api
+        lib
+        system
+        toolPkgs
+        ;
+    }
     // {
       inherit (harness)
         cacheKey

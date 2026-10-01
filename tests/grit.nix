@@ -5,6 +5,7 @@
   toolPkgs,
 }:
 let
+  inherit (builtins) attrNames deepSeq tryEval;
   inherit (builtins) hasAttr;
 
   fixtureRoot = ./fixtures/grit;
@@ -129,14 +130,14 @@ let
       gritArgs.check = [ "source-two" ];
     };
   };
-  rejects = value: !(builtins.tryEval (builtins.deepSeq value true)).success;
-  rejectsEmptyProfiles = rejects (builtins.attrNames emptyProfilesProject.checks);
-  rejectsMissingPatterns = rejects (builtins.attrNames missingPatternsProject.checks);
-  rejectsMissingPaths = rejects (builtins.attrNames missingPathsProject.checks);
-  rejectsSinglePattern = rejects (builtins.attrNames singlePatternProject.checks);
-  rejectsNativePatterns = rejects (builtins.attrNames nativePatternsProject.checks);
-  rejectsGlobPath = rejects (builtins.attrNames globPathProject.checks);
-  rejectsScopeArgs = rejects (builtins.attrNames unsafeArgsProject.checks);
+  rejects = value: !(tryEval (deepSeq value true)).success;
+  rejectsEmptyProfiles = rejects (attrNames emptyProfilesProject.checks);
+  rejectsMissingPatterns = rejects (attrNames missingPatternsProject.checks);
+  rejectsMissingPaths = rejects (attrNames missingPathsProject.checks);
+  rejectsSinglePattern = rejects (attrNames singlePatternProject.checks);
+  rejectsNativePatterns = rejects (attrNames nativePatternsProject.checks);
+  rejectsGlobPath = rejects (attrNames globPathProject.checks);
+  rejectsScopeArgs = rejects (attrNames unsafeArgsProject.checks);
 
   fakeGrit = toolPkgs.writeShellApplication {
     name = "grit";
@@ -470,7 +471,8 @@ toolPkgs.runCommandLocal "grit-consumer"
     chmod -R u+w "$TMPDIR/apply"
     cd "$TMPDIR/apply"
     ${violationProject.apps.grit-codemod-apply.program}
-    diff -qr ${fixtureRoot + "/golden"} "$TMPDIR/apply"
+    # The apply runner's cache is not part of the source rewrite.
+    diff -qr --exclude=.tmp ${fixtureRoot + "/golden"} "$TMPDIR/apply"
     ${violationProject.apps.grit-codemod-check.program}
 
     echo 'test: supplied Grit package and nix-tools fd are honored'

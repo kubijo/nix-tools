@@ -73,6 +73,7 @@ rec {
       extraOptions ? [ ],
       # One invocation containing every matching path. null inherits the built-in default.
       batch ? null,
+      stdin ? "null",
     }:
     {
       inherit
@@ -84,6 +85,7 @@ rec {
         exe
         extraOptions
         batch
+        stdin
         ;
     };
 
@@ -117,6 +119,7 @@ rec {
       exclude ? [ ],
       searchPaths ? [ "." ],
       batch ? false,
+      stdin ? "null",
     }:
     {
       inherit
@@ -125,6 +128,7 @@ rec {
         options
         searchPaths
         batch
+        stdin
         ;
       excludes = exclude;
     };
@@ -140,6 +144,26 @@ rec {
       excludes = exclude;
     };
 
+  debianCheckerOptions =
+    {
+      enable ? true,
+      exclude ? [ ],
+      configFile ? null,
+      package ? null,
+      exe ? null,
+      extraOptions ? [ ],
+    }:
+    {
+      inherit
+        enable
+        exclude
+        configFile
+        package
+        exe
+        extraOptions
+        ;
+    };
+
   linkCheckerOptions =
     {
       enable ? true,
@@ -151,6 +175,7 @@ rec {
       extraOptions ? [ ],
       # null inherits the built-in's choice; a bool is an explicit override.
       batch ? null,
+      stdin ? "null",
       # Matched against the link target, not the file holding it.
       ignoreLinks ? [ ],
     }:
@@ -164,6 +189,7 @@ rec {
         exe
         extraOptions
         batch
+        stdin
         ignoreLinks
         ;
     };

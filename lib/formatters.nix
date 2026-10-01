@@ -8,6 +8,7 @@
   args,
 }:
 let
+  inherit (builtins) readFile;
   # Both node tools are rebuilt against the one runtime, so enabling both lands one closure.
   onNode =
     name: drv:
@@ -27,7 +28,7 @@ let
       toolPkgs.coreutils
       toolPkgs.diffutils
     ];
-    text = builtins.readFile ./xml-format.sh;
+    text = readFile ./xml-format.sh;
   };
 
   gritFormat = toolPkgs.writeShellApplication {
@@ -36,7 +37,7 @@ let
       toolPkgs.coreutils
       toolPkgs.diffutils
     ];
-    text = builtins.readFile ./grit-format.sh;
+    text = readFile ./grit-format.sh;
   };
 
   # The wrapper reads the tool and its argv at run time, so both stay in `options`.
@@ -64,6 +65,64 @@ let
 
   # `mkCommand` replaces the exe with a wrapper, for a tool taking one file at a time.
   defaults = {
+    whitespace = {
+      package = toolPkgs.editorconfig-checker;
+      binary = "editorconfig-checker";
+      options = [ "fix" ];
+      configFile = ../conf/editorconfig;
+      configFlag = import ./whitespace-policy.nix { inherit lib; };
+      includes = [
+        "*.sls"
+        "*.j2"
+        "*.jinja"
+      ];
+      # The adapter closure must participate in treefmt's argv cache key too.
+      wrapperOptions = [ (lib.getExe (import ./whitespace.nix { inherit toolPkgs; })) ];
+      mkCommand = writeShellScript "whitespace-format" ''
+        tool=$1
+        adapter=$2
+        shift 2
+        exec "$adapter" "$tool" "$@"
+      '';
+    };
+
+    php = {
+      package = toolPkgs.mago;
+      binary = "mago";
+      options = [ "format" ];
+      configFile = ../conf/mago.toml;
+      configFlag = configFlagged "--config";
+      configFirst = true;
+      includes = [
+        "*.php"
+        "*.inc"
+      ];
+    };
+
+    debian = {
+      package = toolPkgs.callPackage ../nix/debputy.nix { };
+      binary = "debputy-nix-tools";
+      options = [
+        "reformat"
+        "--style=black"
+        "--auto-fix"
+        "--no-linter-exit-code"
+      ];
+      configFile = ../conf/debputy.yaml;
+      configFlag = configFlagged "--config";
+      includes = [
+        "debian/control"
+        "debian/copyright"
+        "debian/tests/control"
+        "debian/watch"
+      ];
+      mkCommand = writeShellScript "debian-format" ''
+        tool=$1
+        shift
+        exec "$tool" "$@"
+      '';
+    };
+
     nix = {
       package = toolPkgs.nixfmt;
       binary = "nixfmt";
@@ -443,7 +502,13 @@ let
         if opts.options != null then
           opts.options
         else
-          (def.options or [ ]) ++ lib.optionals (configFile != null) (def.configFlag configFile);
+          let
+            configArgs = lib.optionals (configFile != null) (def.configFlag configFile);
+          in
+          if def.configFirst or false then
+            configArgs ++ (def.options or [ ])
+          else
+            (def.options or [ ]) ++ configArgs;
     in
     assert lib.assertMsg (opts.configFile == null || def ? configFlag)
       "${name}: this formatter takes no config path — pass the flag through `extraOptions`, or replace the argv with `options`";
@@ -454,7 +519,8 @@ let
     {
       command = if wrapped then def.mkCommand else exe;
       # The tool leads, then its argv, then `--` before the file list.
-      options = if wrapped then [ exe ] ++ options ++ [ "--" ] else options;
+      options =
+        if wrapped then [ exe ] ++ (def.wrapperOptions or [ ]) ++ options ++ [ "--" ] else options;
       includes = if opts.includes != null then opts.includes else def.includes;
       excludes = toTreefmtExcludes opts.exclude;
       priority = if opts.priority != null then opts.priority else def.priority or 0;

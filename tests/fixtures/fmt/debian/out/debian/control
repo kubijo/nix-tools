@@ -1,0 +1,18 @@
+Source: example
+Section: misc
+Priority: optional
+Maintainer: Example Team <example@example.org>
+Build-Depends:
+ debhelper-compat (= 13),
+ zlib1g-dev,
+Standards-Version: 4.7.4
+Rules-Requires-Root: no
+
+Package: example
+Architecture: all
+Depends:
+ libc6,
+ zlib1g,
+ ${misc:Depends},
+Description: example package for testing
+ A longer description of this useful example package.
