@@ -14,6 +14,10 @@ format *args:
 lint *args:
     {{ nix_dev }} repochk {{ args }}
 
+# Query upstream versions; deliberately separate from cached checks.
+outdated *args:
+    {{ nix_dev }} repo-outdated {{ args }}
+
 # Every check, naming each failure rather than stopping at the first.
 check *args:
     nix flake check {{ flake_dir }} -L --keep-going --quiet {{ args }}

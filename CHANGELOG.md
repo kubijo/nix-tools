@@ -8,6 +8,20 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in online outdated reports for Nix inputs, Cargo, UV, npm, pnpm, modern Yarn, Composer and GitHub Actions, with
+  explicit release entries and JSON command adapters. Live reports stay outside cached flake checks and preserve
+  consumer manifests and lockfiles.
+- Dependency inventories use native package-manager reports and upstream npm/Yarn libraries, including ecosystem version
+  semantics and alias/workspace source handling.
+- File-backed outdated providers use their package managers; explicit release entries use nvchecker's JSON report.
+  Standalone tools require explicit source metadata, with no package catalogue or installed-environment inventory.
+  Custom tools support runtime version discovery, reusable checker metadata and static skips.
+- `lib.packagesFor toolPkgs` exposes the locally packaged debputy derivation for explicit release entries without
+  copying its version string.
+- A Python 3.14 project and UV lockfile, with uv2nix runtime/test environments, Ty checks and a Tyro-based outdated CLI.
+
 ## [0.6.0] - 2026-10-01
 
 ### Added

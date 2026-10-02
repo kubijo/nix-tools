@@ -48,7 +48,7 @@ let
     format.debian = true;
     lint.debian = true;
   };
-  debputy = toolPkgs.callPackage ../nix/debputy.nix { };
+  inherit (api.packagesFor toolPkgs) debputy;
   adapter = lib.getExe' debputy "debputy-nix-tools";
   test =
     name: script:
@@ -396,7 +396,22 @@ in
         callPackage = throw "disabled Debian reached its package";
       };
       lazy = project { toolPkgs = poisoned; };
+      otherPkgs = toolPkgs // {
+        callPackage = _: _: mockDebian;
+      };
+      debianChecker =
+        (import ../lib/checker.nix {
+          inherit lib;
+          toolPkgsFor = _: toolPkgs;
+        })
+          {
+            inherit system toolPkgs;
+            debian = true;
+          };
     in
+    assert (lib.head debian.formatter.selection.formatters.debian.options) == adapter;
+    assert (lib.head debianChecker.selection.projectCheckers).command == adapter;
+    assert (api.packagesFor otherPkgs).debputy.outPath == mockDebian.outPath;
     assert
       attrNames (functionArgs schemas.debianCheckerOptions) == [
         "configFile"

@@ -1,0 +1,279 @@
+"""Release entries, Nix input graphs and GitHub workflow references."""
+
+import re
+
+import yaml
+from common import (
+    Failure,
+    Result,
+    UnreadableSource,
+    command_json,
+    compare,
+    relative,
+    run,
+    snapshot,
+    validate_adapter,
+    version,
+)
+
+
+def release_entry(client, item, provider='tools', root=None):
+    name, current = item['name'], item.get('version', '')
+    source = item.get('source', name)
+
+    if item.get('unknown'):
+        return Result(provider, name, source, 'unknown', current, detail=item['unknown'])
+
+    if item.get('skip'):
+        return Result(provider, name, source, 'skipped', current, detail=item['skip'])
+
+    if 'versionCommand' in item:
+        if root is None:
+            raise Failure('Runtime version discovery requires a repository root')
+        with snapshot(root) as work:
+            output, _ = run(item['versionCommand'], work, client.timeout)
+        current = output.strip()
+        if 'versionPattern' in item:
+            match = re.fullmatch(item['versionPattern'], current)
+            if not match or 'version' not in match.groupdict():
+                raise Failure('Runtime version output did not match the declared versionPattern')
+            current = match['version']
+        if not current or '\n' in current or '\r' in current or version(current) is None:
+            raise Failure('Runtime command did not return one valid version')
+
+    kind = item.get('provider', 'github')
+    try:
+        if kind == 'github':
+            _, latest = client.release(
+                item['repo'],
+                tags=item.get('tags', False),
+                **({'tagPattern': item['tagPattern']} if 'tagPattern' in item else {}),
+            )
+        else:
+            latest = client.registry_release(item)
+    except UnreadableSource as error:
+        return Result(provider, name, source, 'skipped', current, detail=str(error))
+
+    if kind in ('npm', 'crates'):
+        document = command_json([item['reporter'], 'compare', current, latest], '.', client.timeout)
+        rows = list(validate_adapter(document, provider, source))
+        if len(rows) != 1 or rows[0].current != current or rows[0].latest != latest:
+            raise Failure('Invalid semantic version comparison report')
+        rows[0].name = name
+        return rows[0]
+
+    result = compare(provider, name, source, current, latest)
+    if result.state == 'unknown':
+        result.state = 'skipped'
+    return result
+
+
+def input_owners(lock):
+    nodes, root = lock['nodes'], lock['root']
+    owners = {}
+
+    def resolve(edge, seen=()):
+        if isinstance(edge, str):
+            if edge not in nodes:
+                raise Failure('Nix lock graph references a missing node')
+            return edge
+        if not isinstance(edge, list) or not all(isinstance(x, str) for x in edge):
+            raise Failure('Invalid Nix follows reference')
+        key = tuple(edge)
+        if key in seen:
+            raise Failure('Cyclic Nix follows reference')
+        node = root
+        for part in edge:
+            node = resolve(nodes[node]['inputs'][part], seen + (key,))
+        return node
+
+    def walk(node, path, ancestors):
+        if node in ancestors:
+            return
+        for name, edge in nodes[node].get('inputs', {}).items():
+            target = resolve(edge)
+            nested = path + [name]
+            owners.setdefault(target, set()).add('/'.join(nested))
+            walk(target, nested, ancestors | {node})
+
+    walk(root, [], set())
+    return owners
+
+
+def nix_jobs(config, root, client):
+    lock_file = config.get('lockFile', 'flake.lock')
+    relative(root, lock_file)
+    relative(root, 'flake.nix')
+    with snapshot(root) as work:
+        metadata = command_json(
+            [
+                config['exe'],
+                '--extra-experimental-features',
+                'nix-command flakes',
+                'flake',
+                'metadata',
+                '--json',
+                '--no-update-lock-file',
+                '--no-write-lock-file',
+                '--reference-lock-file',
+                str(work / lock_file),
+                'path:' + str(work),
+            ],
+            work,
+            client.timeout,
+        )
+    lock = metadata['locks']
+    owners = input_owners(lock)
+
+    if not owners:
+        yield (
+            'inputs',
+            lambda: Result('nix', 'inputs', 'flake.lock', 'up-to-date', detail='Lockfile declares no external inputs'),
+        )
+
+    for node_name, names in sorted(owners.items()):
+        node = lock['nodes'][node_name]
+        if 'locked' not in node:
+            raise Failure('Nix input has no locked source')
+        label = ', '.join(sorted(names))
+        yield label, lambda node=node, label=label: nix_input(node, label, config, root, client)
+
+
+def nix_input(node, label, config, root, client):
+    locked, original = node['locked'], node.get('original', {})
+    current = locked.get('rev', locked.get('narHash', ''))
+    source = config.get('lockFile', 'flake.lock') + ':' + label
+    detail = 'Update the owning top-level input: ' + ', '.join(sorted({p.split('/')[0] for p in label.split(', ')}))
+
+    if original.get('rev'):
+        return Result('nix', label, source, 'pinned', current, detail='Explicit revision pin. ' + detail)
+
+    kind, ref = locked['type'], original.get('ref', 'HEAD')
+    if kind == 'github':
+        repo = f'{locked["owner"]}/{locked["repo"]}'
+        tag = ref
+
+        if version(ref) is not None:
+            try:
+                tag, _ = client.release(repo)
+            except UnreadableSource as error:
+                return Result('nix', label, source, 'skipped', current, detail=str(error))
+
+        latest = client.commit(repo, tag)
+        return Result(
+            'nix',
+            label,
+            source,
+            'up-to-date' if current == latest else 'outdated',
+            current,
+            latest=latest,
+            detail=f'{repo}: {ref} -> {tag}. {detail}',
+        )
+
+    if kind == 'git':
+        url = original.get('url', locked.get('url'))
+        if not isinstance(url, str) or url.startswith(('file:', '/')):
+            return Result(
+                'nix', label, source, 'unknown', current, detail='Local Git inputs require an explicit adapter'
+            )
+
+        patterns = ['HEAD'] if ref == 'HEAD' else [f'refs/heads/{ref}', f'refs/tags/{ref}', f'refs/tags/{ref}^{{}}']
+        output, _ = run([config['git'], 'ls-remote', '--', url, *patterns], root, client.timeout)
+        rows = dict(line.split('\t', 1)[::-1] for line in output.splitlines())
+        matches = {rows[p] for p in patterns if p in rows}
+
+        if f'refs/tags/{ref}^{{}}' in rows:
+            matches.discard(rows.get(f'refs/tags/{ref}'))
+
+        if len(matches) != 1:
+            raise Failure('Git ref is missing or ambiguous')
+
+        latest = matches.pop()
+        return Result(
+            'nix',
+            label,
+            source,
+            'up-to-date' if current == latest else 'outdated',
+            current,
+            latest=latest,
+            detail=detail,
+        )
+
+    return Result(
+        'nix', label, source, 'unknown', current, detail=f'Unsupported/local lock source: {kind}; supply an adapter'
+    )
+
+
+def workflow_jobs(config, root, client):
+    directory = relative(root, config.get('path', '.github/workflows'), directory=True)
+    paths = sorted(set(directory.glob('*.yml')) | set(directory.glob('*.yaml')))
+
+    if not paths:
+        raise Failure('No workflow files found in the enabled directory')
+
+    refs = {}
+    for path in paths:
+        workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
+
+        if not isinstance(workflow, dict) or not isinstance(workflow.get('jobs'), dict):
+            raise Failure('Invalid workflow jobs mapping')
+
+        for job in workflow['jobs'].values():
+            if not isinstance(job, dict):
+                raise Failure('Invalid workflow job')
+            uses = ([job['uses']] if 'uses' in job else []) + [
+                step['uses'] for step in job.get('steps', []) if 'uses' in step
+            ]
+
+            for value in uses:
+                if not isinstance(value, str):
+                    raise Failure('Invalid workflow uses reference')
+                refs.setdefault(value, set()).add(str(path.relative_to(root)))
+
+    for ref, paths in sorted(refs.items()):
+        source = ', '.join(sorted(paths))
+        yield ref, lambda ref=ref, source=source: action(ref, source, client)
+
+    if not refs:
+        yield (
+            'workflows',
+            lambda: Result(
+                'githubActions',
+                'workflows',
+                str(directory.relative_to(root)),
+                'up-to-date',
+                detail='No external action references',
+            ),
+        )
+
+
+def action(ref, source, client):
+    if ref.startswith('./'):
+        return Result(
+            'githubActions', ref, source, 'skipped', detail='Local action/workflow; versioned with this repository'
+        )
+
+    if ref.startswith('docker://') or '${{' in ref:
+        return Result(
+            'githubActions', ref, source, 'unknown', detail='Container or dynamic reference requires an adapter'
+        )
+
+    match = re.fullmatch(r'([\w.-]+/[\w.-]+)(?:/[^@]+)?@([^\s]+)', ref)
+    if not match:
+        raise Failure('Unsupported action reference')
+
+    repo, current = match.groups()
+    try:
+        tag, _ = client.release(repo)
+    except UnreadableSource as error:
+        return Result('githubActions', ref, source, 'skipped', current, detail=str(error))
+    before, after = client.commit(repo, current), client.commit(repo, tag)
+    return Result(
+        'githubActions',
+        ref,
+        source,
+        'up-to-date' if before == after else 'outdated',
+        current,
+        latest=tag,
+        detail='Compared resolved commits; a newer release may require migration',
+    )

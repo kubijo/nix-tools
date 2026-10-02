@@ -3,6 +3,7 @@
   lib,
   system,
   toolPkgs,
+  renderPython,
 }:
 let
   inherit (builtins) deepSeq tryEval;
@@ -38,10 +39,6 @@ let
       } args
     );
   base = project { };
-  renderPython = toolPkgs.python3.withPackages (p: [
-    p.jinja2
-    p.pyyaml
-  ]);
   test =
     name: script:
     toolPkgs.runCommandLocal name

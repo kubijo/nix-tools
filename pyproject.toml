@@ -1,0 +1,39 @@
+[project]
+name = "nix-tools-python"
+version = "0.1.0"
+description = "Python adapters and maintenance tooling for nix-tools"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "packaging>=25.0",
+    "pyyaml>=6.0.3",
+    "tyro>=1.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "coverage>=7.10.0",
+    "editorconfig>=0.17.1",
+    "jinja2>=3.1.6",
+    "ty>=0.0.84",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.ty.environment]
+extra-paths = ["lib/outdated"]
+
+[tool.ty.src]
+include = [
+    "lib/outdated",
+    "tests/outdated_test.py",
+    "tests/outdated_native_test.py",
+    "tests/python_project_test.py",
+]
