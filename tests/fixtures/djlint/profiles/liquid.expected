@@ -1,0 +1,10 @@
+<section>
+    {% unless user == nil %}
+        <p>{{ user.name | escape }}</p>
+    {% endunless %}
+    {% for item in items %}
+        <span>{{ item.label | default: "Empty" }}</span>
+    {% else %}
+        <p>Empty</p>
+    {% endfor %}
+</section>

@@ -47,7 +47,7 @@ def run(arguments):
         command = ['@fd@', '--hidden', '--no-require-git', '--show-errors', '--type', 'file', '--print0']
         exclusions = json.loads(os.environ.get('REPOCHK_EXCLUDES_JSON', '[]'))
         for pattern in exclusions:
-            command.extend(['--exclude', pattern])
+            command.append(f'--exclude={pattern}')
         command.extend(['.', '.'])
         result = subprocess.run(command, capture_output=True, check=False)
         # fd can return zero after skipping an unreadable directory.

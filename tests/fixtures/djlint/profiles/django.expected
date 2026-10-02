@@ -1,0 +1,13 @@
+{% load static %}
+<section>
+    {% if user.is_authenticated %}
+        <p>{{ user.name|default:"Guest" }}</p>
+    {% else %}
+        <p>Anonymous</p>
+    {% endif %}
+    {% for item in items %}
+        <span>{{ item.label }}</span>
+    {% empty %}
+        <p>Empty</p>
+    {% endfor %}
+</section>

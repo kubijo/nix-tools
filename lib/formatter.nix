@@ -64,10 +64,19 @@ in
   svg ? false,
   png ? false,
   caddyfile ? false,
+  angular ? false,
+  askama ? false,
+  django ? false,
+  golang ? false,
+  handlebars ? false,
+  jinja ? false,
+  liquid ? false,
+  nunjucks ? false,
+  tera ? false,
 }:
 let
-  # treefmt does not hash a command's store path, only its size and mtime. Keep this
-  # wrapper constant and put the real command plus every declared input in `options`.
+  # treefmt does not hash a command's store path, only its size and mtime.
+  # Keep this wrapper constant and put the real command plus every declared input in `options`.
   customFormatter = toolPkgs.writeShellScript "custom-formatter" ''
     tool=$1
     option_count=$2
@@ -152,7 +161,22 @@ let
     }
     // lib.mapAttrs (_: toggle biomeFormatterOptions) {
       inherit javascript typescript;
-    };
+    }
+    //
+      lib.mapAttrs (name: import ./djlint-options.nix { inherit lib; } "format.${name}" formatterOptions)
+        {
+          inherit
+            angular
+            askama
+            django
+            golang
+            handlebars
+            jinja
+            liquid
+            nunjucks
+            tera
+            ;
+        };
 
   formatters =
     import ./formatters.nix {

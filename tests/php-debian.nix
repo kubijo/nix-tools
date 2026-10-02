@@ -294,8 +294,14 @@ in
       test ! -s "$TMPDIR/result"
     done
     expect_failure ${debian.apps.lint.program}
-    ${lint { debian.exclude = [ "locked" ]; }}
-    REPOCHK_EXCLUDES_JSON='["locked"]' ${adapter} coverage > "$TMPDIR/selected.json"
+    ${lint {
+      debian.exclude = [
+        "locked"
+        "--"
+        "-skip"
+      ];
+    }}
+    REPOCHK_EXCLUDES_JSON='["locked", "--", "-skip"]' ${adapter} coverage > "$TMPDIR/selected.json"
     python - "$TMPDIR/selected.json" <<'PYTEST'
     import json, sys
     assert 'debian/control' in json.load(open(sys.argv[1]))

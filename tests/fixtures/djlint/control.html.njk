@@ -1,0 +1,5 @@
+{% macro badge(value) %}<strong>{{ value | escape }}</strong>{% endmacro %}
+<div>
+{{- badge(name) -}}
+{%- if enabled -%}<span>enabled</span>{%- elif name -%}<span>named</span>{%- else -%}<span>off</span>{%- endif -%}
+</div>

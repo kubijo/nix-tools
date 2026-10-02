@@ -1,0 +1,12 @@
+<section>
+    {% if user %}
+        <p>{{ user.name | default(value="Guest") }}</p>
+    {% else %}
+        <p>Anonymous</p>
+    {% endif %}
+    {% for item in items %}
+        <span>{{ item.label }}</span>
+    {% else %}
+        <p>Empty</p>
+    {% endfor %}
+</section>

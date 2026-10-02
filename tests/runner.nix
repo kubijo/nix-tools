@@ -122,6 +122,32 @@ let
         ]
     )
     // {
+      "runner-exclusion-dashes-${label}" = test "runner-exclusion-dashes-${label}" ''
+        printf BAD > '--'
+        printf BAD > '-dash.probe'
+        printf BAD > '=literal.probe'
+        if ${
+          (project {
+            exclude = [ "--" ];
+            lint.extraCheckers.probe = spec // {
+              inherit batch;
+              includes = [
+                "*.probe"
+                "--"
+              ];
+              exclude = [
+                "-dash.probe"
+                "=literal.probe"
+              ];
+            };
+          }).apps.lint.program
+        } > log 2>&1; then cat log; exit 1; fi
+        cat log
+        grep -q 'checked 2 files' log
+        test "$(wc -l < visited)" -eq 2
+        grep -q a.probe visited
+        grep -q z.probe visited
+      '';
       "runner-globs-${label}" = test "runner-globs-${label}" ''
         printf BAD > 'part,one.probe'
         printf GOOD > '-dash.probe'

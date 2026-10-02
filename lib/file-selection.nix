@@ -15,10 +15,7 @@ map (
     "--print0"
     "--glob"
   ]
-  ++ lib.concatMap (p: [
-    "--exclude"
-    p
-  ]) (excludes ++ checker.excludes)
+  ++ map (p: "--exclude=${p}") (excludes ++ checker.excludes)
   ++ [
     "--"
     pattern

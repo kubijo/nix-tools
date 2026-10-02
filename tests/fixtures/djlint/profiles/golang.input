@@ -1,0 +1,12 @@
+<section>
+{{ if .User }}
+<p>{{ .User.Name }}</p>
+{{ else }}
+<p>Anonymous</p>
+{{ end }}
+{{ range .Items }}
+<span>{{ .Label }}</span>
+{{ else }}
+<p>Empty</p>
+{{ end }}
+</section>

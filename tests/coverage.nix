@@ -178,6 +178,22 @@ in
     data = json.load(open(sys.argv[1]))
     assert data['unmapped_project_checks'] == ['lint:templates']
     PYTEST
+    printf 'invalid python' > '-skip.py'
+    git add -- '-skip.py'
+    ${
+      report {
+        lint.exclude = [
+          "--"
+          "-skip.py"
+        ];
+      }
+    } --json > "$TMPDIR/exclusions.json"
+    python - "$TMPDIR/exclusions.json" <<'PYTEST'
+    import json, sys
+    rows = {row['path']: row for row in json.load(open(sys.argv[1]))['files']}
+    assert rows['-skip.py']['lint'] == []
+    assert rows['nested/tool.py']['lint'] == [{'name': 'python', 'kind': 'semantic'}]
+    PYTEST
   '';
   coverage-whitespace-is-not-semantic = test "coverage-whitespace-is-not-semantic" ''
     ${
