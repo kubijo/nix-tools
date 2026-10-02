@@ -35,9 +35,9 @@ jobs:
   check:
     strategy:
       fail-fast: false
-      # macOS is not optional here: the wrappers lean on coreutils flags GNU-only elsewhere.
+      # Exercise every supported system, including ARM Linux and macOS.
       matrix:
-        runner: [ubuntu-latest, macos-latest]
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
