@@ -1,0 +1,10 @@
+<section>
+{% if enabled %}
+<p>{{ name }}</p>
+{% else %}
+<p>Disabled</p>
+{% endif %}
+{% for item in items %}
+<span>{{ item }}</span>
+{% endfor %}
+</section>

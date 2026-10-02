@@ -1,0 +1,10 @@
+<section>
+    @if (user) {
+    <button type="button" [disabled]="!user.active" (click)="select(user)">{{ user.name | uppercase }}</button>
+    } @else {
+    <p>No user</p>
+    }
+    @for (item of items; track item.id) {
+    <p [class.selected]="item.selected">{{ item.label }}</p>
+    }
+</section>

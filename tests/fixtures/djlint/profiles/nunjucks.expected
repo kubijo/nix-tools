@@ -1,0 +1,14 @@
+{% macro badge(value) %}<strong>{{ value | escape }}</strong>{% endmacro %}
+<section>
+    {% switch state %}
+        {% case "ready" %}
+        <p>{{ badge(name) }}</p>
+        {% default %}
+        <p>Waiting</p>
+    {% endswitch %}
+    {% for item in items %}
+        <span>{{ item.label }}</span>
+    {% else %}
+        <p>Empty</p>
+    {% endfor %}
+</section>

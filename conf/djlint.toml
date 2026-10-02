@@ -1,0 +1,5 @@
+indent = 4
+max_line_length = 120
+# The pinned djLint profile does not register
+# Nunjucks' switch/end-switch pair.
+custom_blocks = ["switch"]

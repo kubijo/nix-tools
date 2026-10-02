@@ -63,8 +63,29 @@ let
   # (2.5, format/formatter.go:74) — so a config reached any other way cannot bust that cache.
   configFlagged = import ./config-path.nix { inherit toolPkgs; };
 
-  # `mkCommand` replaces the exe with a wrapper, for a tool taking one file at a time.
-  defaults = {
+  djlint = import ./djlint.nix { inherit lib toolPkgs; };
+
+  # `mkCommand` replaces the exe with a wrapper,
+  # for a tool taking one file at a time.
+  djlintDefaults = lib.genAttrs djlint.profiles (
+    profile:
+    djlint.defaults profile
+    // {
+      options = [
+        "format"
+        profile
+      ];
+      wrapperOptions = [ (lib.getExe djlint.adapter) ];
+      mkCommand = writeShellScript "djlint-format" ''
+        tool=$1
+        adapter=$2
+        shift 2
+        exec "$adapter" "$tool" "$@"
+      '';
+    }
+  );
+
+  nativeDefaults = {
     whitespace = {
       package = toolPkgs.editorconfig-checker;
       binary = "editorconfig-checker";
@@ -456,6 +477,8 @@ let
       ];
     };
   };
+
+  defaults = nativeDefaults // djlintDefaults;
 
   # Built from the resolved argv, so an injected rustfmt reaches fenced rust too,
   # and a language switched off takes its tags with it.

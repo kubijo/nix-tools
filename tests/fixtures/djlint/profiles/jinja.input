@@ -1,0 +1,13 @@
+{% macro badge(value) %}<strong>{{ value|escape }}</strong>{% endmacro %}
+<section>
+{% if user %}
+<p>{{ badge(user.name) }}</p>
+{% else %}
+<p>Anonymous</p>
+{% endif %}
+{% for item in items %}
+<span>{{ item.label }}</span>
+{% else %}
+<p>Empty</p>
+{% endfor %}
+</section>

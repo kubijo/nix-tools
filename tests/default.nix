@@ -110,6 +110,14 @@ rec {
     lib.listToAttrs (lib.concatMap fmtCheck fmtNames)
     // lib.listToAttrs (map chkCheck chkNames)
     // phpDebian
+    // import ./djlint.nix {
+      inherit
+        api
+        lib
+        system
+        toolPkgs
+        ;
+    }
     // import ./runner.nix {
       inherit
         api

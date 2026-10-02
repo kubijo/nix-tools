@@ -26,6 +26,7 @@ in
   inherit (options) defaultExcludes;
 
   conf = {
+    djlint = ../conf/djlint.toml;
     salt-lint = ../conf/salt-lint.yaml;
     editorconfig = ../conf/editorconfig;
     mago = ../conf/mago.toml;

@@ -1,0 +1,12 @@
+<section>
+{{#if user}}
+<p>{{user.name}}</p>
+{{else}}
+<p>Anonymous</p>
+{{/if}}
+{{#each items}}
+<span data-index="{{@index}}">{{this.label}}</span>
+{{else}}
+<p>Empty</p>
+{{/each}}
+</section>

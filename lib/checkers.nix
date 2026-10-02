@@ -10,6 +10,8 @@ let
 
   configFlagged = import ./config-path.nix { inherit toolPkgs; };
 
+  djlint = import ./djlint.nix { inherit lib toolPkgs; };
+
   biomeLint = {
     package = toolPkgs.biome;
     binary = "biome";
@@ -22,7 +24,25 @@ let
     batch = true;
   };
 
-  defaults = {
+  djlintDefaults = lib.genAttrs djlint.profiles (
+    profile:
+    djlint.defaults profile
+    // {
+      options = [
+        "lint"
+        profile
+      ];
+      batch = true;
+      separateFiles = true;
+      mkCommand =
+        exe:
+        writeShellScript "djlint-check" ''
+          exec ${lib.getExe djlint.adapter} ${lib.escapeShellArg exe} "$@"
+        '';
+    }
+  );
+
+  nativeDefaults = {
     salt = {
       package = toolPkgs.salt-lint;
       binary = "salt-lint";
@@ -39,6 +59,7 @@ let
     whitespace = {
       package = toolPkgs.editorconfig-checker;
       binary = "editorconfig-checker";
+      separateFiles = true;
       mkCommand =
         exe:
         writeShellScript "whitespace-check" ''
@@ -219,6 +240,8 @@ let
     };
   };
 
+  defaults = nativeDefaults // djlintDefaults;
+
   resolve =
     name: opts:
     let
@@ -258,7 +281,7 @@ let
       inherit name;
       inherit (opts) stdin;
       command = if def ? mkCommand then def.mkCommand exe else exe;
-      options = argv ++ opts.extraOptions ++ lib.optional (name == "whitespace") "--";
+      options = argv ++ opts.extraOptions ++ lib.optional (def.separateFiles or false) "--";
       includes = if opts.includes != null then opts.includes else def.includes;
       excludes = opts.exclude;
       searchPaths = def.searchPaths or [ "." ];

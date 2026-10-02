@@ -50,6 +50,15 @@ in
   sql ? false,
   po ? false,
   xml ? false,
+  angular ? false,
+  askama ? false,
+  django ? false,
+  golang ? false,
+  handlebars ? false,
+  jinja ? false,
+  liquid ? false,
+  nunjucks ? false,
+  tera ? false,
 }:
 let
   args =
@@ -72,9 +81,25 @@ let
         ;
     }
     // {
-      # `ignoreLinks` matches a link target rather than a file, so this takes its own schema.
+      # `ignoreLinks` matches a link target rather
+      # than a file, so this takes its own schema.
       links = toggle linkCheckerOptions links;
-    };
+    }
+    //
+      lib.mapAttrs (name: import ./djlint-options.nix { inherit lib; } "lint.${name}" fileCheckerOptions)
+        {
+          inherit
+            angular
+            askama
+            django
+            golang
+            handlebars
+            jinja
+            liquid
+            nunjucks
+            tera
+            ;
+        };
 
   spliced = lib.mapAttrs (name: spec: { inherit name; } // checkerSpecOptions spec) extraCheckers;
 
