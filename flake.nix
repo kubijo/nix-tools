@@ -28,7 +28,7 @@
     };
 
     nix-gritql = {
-      url = "github:kubijo/nix-gritql/v0.5.0";
+      url = "github:kubijo/nix-gritql/v0.6.0";
       inputs.nixpkgs-pinned.follows = "nixpkgs-pinned";
     };
   };
