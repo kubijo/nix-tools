@@ -22,6 +22,10 @@ for this library `nix flake update` is a semantic change.
   copying its version string.
 - A Python 3.14 project and UV lockfile, with uv2nix runtime/test environments, Ty checks and a Tyro-based outdated CLI.
 
+### Changed
+
+- Pinned nix-gritql v0.6.0, which uses the published Grit CLI artifact by default on supported platforms.
+
 ## [0.6.0] - 2026-10-01
 
 ### Added
