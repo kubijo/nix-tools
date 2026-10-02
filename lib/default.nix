@@ -2,6 +2,7 @@
   lib,
   nix-gritql,
   toolPkgsFor,
+  pythonEnvsFor,
   supportedSystems ? null,
 }:
 let
@@ -15,11 +16,16 @@ in
       nix-gritql
       supportedSystems
       toolPkgsFor
+      pythonEnvsFor
       ;
   };
 
   # Available before `configure`, so custom splices need no dummy project or foreign nixpkgs.
   inherit toolPkgsFor;
+  packagesFor = toolPkgs: {
+    # Locally packaged tools unavailable from the selected nixpkgs set.
+    debputy = toolPkgs.callPackage ../nix/debputy.nix { };
+  };
   supportedSystems = if supportedSystems == null then [ ] else supportedSystems;
 
   # Both exported to be extended rather than restated.

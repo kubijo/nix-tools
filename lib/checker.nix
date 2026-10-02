@@ -252,6 +252,15 @@ assert lib.assertMsg (
 ) "a checker name cannot be both file-scoped and project-scoped: ${toString nameCollisions}";
 toolPkgs.writeShellApplication {
   inherit name;
+  passthru.outdatedEntries =
+    lib.mapAttrsToList
+      (
+        name: spec:
+        (import ./tool-records.nix { inherit lib toolPkgs; }).metadata "lint.${name}" spec.outdated
+      )
+      (
+        lib.filterAttrs (_: spec: (spec.outdated or null) != null) (extraCheckers // extraProjectCheckers)
+      );
   passthru.selection = {
     inherit excludes fileCheckers projectCheckers;
     files = map (checker: checker // { discoveryArgs = fdArgs checker; }) fileCheckers;

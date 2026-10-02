@@ -5,7 +5,6 @@ import pathlib
 import subprocess
 import sys
 import tempfile
-
 import tomllib
 
 # Accept only style and rule switches: discovery, mode, external configuration

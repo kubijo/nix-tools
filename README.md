@@ -64,6 +64,10 @@ includes. Use whitespace formatting for non-HTML templates and retain project re
 Keep the tool pin independent of your nixpkgs. Rust formatting requires your toolchain; SCSS and SVG formatting require
 your `nodejs`. Details and overrides are in the reference.
 
+Opt into `outdated = true` for an online Nix-input report via `nix run .#outdated`. Package-manager and GitHub Actions
+inventories are separate opt-ins; standalone tool releases require explicit sources. See
+[outdated reports](docs/outdated.md).
+
 ## Reference
 
 - [Tools, options and exclusions](docs/reference.md)

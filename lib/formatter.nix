@@ -225,6 +225,10 @@ lib.warnIf (onUnmatched == "error")
       # Carried forward so a dev shell or validate step reuses it instead of adding a second.
       passthru = {
         inherit nodejs;
+        outdatedEntries = lib.mapAttrsToList (
+          name: spec:
+          (import ./tool-records.nix { inherit lib toolPkgs; }).metadata "format.${name}" spec.outdated
+        ) (lib.filterAttrs (_: spec: (spec.outdated or null) != null) extraFormatters);
         selection = { inherit formatters excludes; };
       };
       # Searches upward for the marker, so a subdirectory and a sandbox copy both work.

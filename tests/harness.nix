@@ -530,6 +530,7 @@ rec {
       "command"
       "exclude"
       "options"
+      "outdated"
     ];
     assert hasExactly schemas.formatterSpecOptions [
       "cacheInputs"
@@ -537,6 +538,7 @@ rec {
       "exclude"
       "includes"
       "options"
+      "outdated"
       "priority"
     ];
     assert hasExactly schemas.checkOptions [

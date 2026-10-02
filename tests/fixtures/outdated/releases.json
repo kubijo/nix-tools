@@ -1,0 +1,48 @@
+{
+  "biomejs-biome": [
+    {
+      "tag_name": "@biomejs/biome@2.5.15",
+      "draft": false,
+      "prerelease": false,
+      "published_at": "2026-09-30T15:23:21Z"
+    },
+    {
+      "tag_name": "@biomejs/biome@2.5.14",
+      "draft": false,
+      "prerelease": false,
+      "published_at": "2026-09-16T07:52:49Z"
+    },
+    {
+      "tag_name": "cli/v1.9.4",
+      "draft": false,
+      "prerelease": false,
+      "published_at": "2024-10-17T17:49:23Z"
+    }
+  ],
+  "lycheeverse-lychee": [
+    {
+      "tag_name": "nightly",
+      "draft": false,
+      "prerelease": true,
+      "published_at": "2026-09-28T16:58:58Z"
+    },
+    {
+      "tag_name": "lychee-v0.24.2",
+      "draft": false,
+      "prerelease": false,
+      "published_at": "2026-05-01T15:41:38Z"
+    },
+    {
+      "tag_name": "lychee-lib-v0.24.2",
+      "draft": false,
+      "prerelease": false,
+      "published_at": "2026-05-01T15:40:48Z"
+    },
+    {
+      "tag_name": "v0.15.1",
+      "draft": false,
+      "prerelease": false,
+      "published_at": "2024-04-29T08:07:19Z"
+    }
+  ]
+}

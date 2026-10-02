@@ -99,7 +99,11 @@ rec {
       options ? [ ],
       exclude ? [ ],
       priority ? 0,
+      outdated ? null,
     }:
+    assert lib.assertMsg (
+      outdated == null || lib.isAttrs outdated
+    ) "outdated metadata must be a package or attribute set";
     {
       inherit
         command
@@ -120,7 +124,11 @@ rec {
       searchPaths ? [ "." ],
       batch ? false,
       stdin ? "null",
+      outdated ? null,
     }:
+    assert lib.assertMsg (
+      outdated == null || lib.isAttrs outdated
+    ) "outdated metadata must be a package or attribute set";
     {
       inherit
         command
@@ -138,7 +146,11 @@ rec {
       command,
       options ? [ ],
       exclude ? [ ],
+      outdated ? null,
     }:
+    assert lib.assertMsg (
+      outdated == null || lib.isAttrs outdated
+    ) "outdated metadata must be a package or attribute set";
     {
       inherit command options;
       excludes = exclude;

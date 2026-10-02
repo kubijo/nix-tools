@@ -3,6 +3,7 @@
   lib,
   system,
   toolPkgs,
+  renderPython,
 }:
 let
   inherit (builtins) deepSeq toJSON tryEval;
@@ -52,10 +53,6 @@ let
     printf '%s\n' "$@" >> "$NIX_TOOLS_DJLINT_LOG"
     exec ${lib.getExe toolPkgs.djlint} "$@"
   '';
-  renderPython = toolPkgs.python3.withPackages (p: [
-    p.jinja2
-    p.coverage
-  ]);
 
   # Published compiler/runtime bundle, used only by the tests.
   # No consumer Node dependency.

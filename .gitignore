@@ -2,3 +2,6 @@
 /result
 /result-*
 .claude/*.local.*
+/.venv/
+__pycache__/
+/.coverage*

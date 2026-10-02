@@ -3,6 +3,7 @@
   nix-gritql,
   system,
   toolPkgs,
+  pythonEnvsFor,
   api,
 }:
 let
@@ -23,7 +24,12 @@ let
     mkChecker = import ../lib/checker.nix { inherit lib toolPkgsFor; };
     mkValidate = import ../lib/validate.nix { inherit lib toolPkgsFor; };
     configure = import ../lib/configure.nix {
-      inherit lib nix-gritql toolPkgsFor;
+      inherit
+        lib
+        nix-gritql
+        toolPkgsFor
+        pythonEnvsFor
+        ;
     };
     publicLib = api;
   };
@@ -110,7 +116,18 @@ rec {
     lib.listToAttrs (lib.concatMap fmtCheck fmtNames)
     // lib.listToAttrs (map chkCheck chkNames)
     // phpDebian
+    // import ./outdated.nix {
+      python = (pythonEnvsFor toolPkgs).dev;
+      runtimePython = (pythonEnvsFor toolPkgs).runtime;
+      inherit
+        api
+        lib
+        system
+        toolPkgs
+        ;
+    }
     // import ./djlint.nix {
+      renderPython = (pythonEnvsFor toolPkgs).dev;
       inherit
         api
         lib
@@ -127,6 +144,7 @@ rec {
         ;
     }
     // import ./templates.nix {
+      renderPython = (pythonEnvsFor toolPkgs).dev;
       inherit
         api
         lib

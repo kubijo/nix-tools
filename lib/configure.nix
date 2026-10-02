@@ -3,6 +3,7 @@
   lib,
   nix-gritql,
   toolPkgsFor,
+  pythonEnvsFor,
   supportedSystems ? null,
 }:
 let
@@ -60,6 +61,7 @@ in
   # Shared, hermetic preparation for the formatting and linting check derivations.
   check ? { },
   coverage ? { },
+  outdated ? false,
 }:
 let
   checkArgs = checkOptions check;
@@ -203,6 +205,18 @@ let
       ++ map (step: "lint:${step.name}") structuralLintSteps;
   };
 
+  outdatedReport =
+    import ./outdated.nix
+      {
+        inherit lib toolPkgs;
+        python = (pythonEnvsFor toolPkgs).runtime;
+      }
+      {
+        config = outdated;
+        inherit treeRootFile;
+        entries = formatter.outdatedEntries ++ fileChecker.outdatedEntries;
+      };
+
   misplaced = owned: cfg: lib.intersectLists owned (lib.attrNames cfg);
 
   runnable = drv: {
@@ -236,6 +250,7 @@ assert lib.assertMsg (misplaced gateOwned validate == [ ])
     validate = runnable gate;
     coverage = runnable coverageReport;
   }
+  // lib.optionalAttrs outdatedReport.enable { outdated = runnable outdatedReport.package; }
   // lib.optionalAttrs grit.enable gritProject.apps
   // lib.optionalAttrs astGrep.enable astGrepProject.apps;
 
@@ -260,5 +275,6 @@ assert lib.assertMsg (misplaced gateOwned validate == [ ])
     gate
     coverageReport
   ]
-  ++ lib.optional (nodejs != null) nodejs;
+  ++ lib.optional (nodejs != null) nodejs
+  ++ lib.optional outdatedReport.enable outdatedReport.package;
 }

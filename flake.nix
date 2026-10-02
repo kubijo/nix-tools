@@ -7,6 +7,26 @@
     # Override per call site with `toolPkgs`.
     nixpkgs-pinned.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
+    pyproject-nix = {
+      url = "github:pyproject-nix/pyproject.nix";
+      inputs.nixpkgs.follows = "nixpkgs-pinned";
+    };
+    uv2nix = {
+      url = "github:pyproject-nix/uv2nix";
+      inputs = {
+        pyproject-nix.follows = "pyproject-nix";
+        nixpkgs.follows = "nixpkgs-pinned";
+      };
+    };
+    pyproject-build-systems = {
+      url = "github:pyproject-nix/build-system-pkgs";
+      inputs = {
+        pyproject-nix.follows = "pyproject-nix";
+        uv2nix.follows = "uv2nix";
+        nixpkgs.follows = "nixpkgs-pinned";
+      };
+    };
+
     nix-gritql = {
       url = "github:kubijo/nix-gritql/v0.5.0";
       inputs.nixpkgs-pinned.follows = "nixpkgs-pinned";
@@ -18,6 +38,9 @@
       self,
       nix-gritql,
       nixpkgs-pinned,
+      pyproject-nix,
+      uv2nix,
+      pyproject-build-systems,
     }:
     let
       inherit (nixpkgs-pinned) lib;
@@ -29,6 +52,17 @@
         "aarch64-darwin"
       ];
       eachSystem = lib.genAttrs supportedSystems;
+
+      pythonEnvsFor =
+        pkgs:
+        import ./nix/python.nix {
+          inherit
+            pkgs
+            pyproject-nix
+            uv2nix
+            pyproject-build-systems
+            ;
+        };
 
       toolPkgsFor =
         system:
@@ -43,6 +77,7 @@
           nix-gritql
           supportedSystems
           toolPkgsFor
+          pythonEnvsFor
           ;
       };
 
@@ -53,13 +88,24 @@
           inherit system;
           src = self;
           inherit (import ./nix/self.nix) exclude;
-          format.python = true;
-          format.whitespace.includes = [
-            "conf/editorconfig"
-            "tests/conf/editorconfig"
-            "tests/conf/editorconfig-sections"
-          ];
-          lint.python = true;
+          format = {
+            python.configFile = ./pyproject.toml;
+            javascript = true;
+            whitespace.includes = [
+              "conf/editorconfig"
+              "tests/conf/editorconfig"
+              "tests/conf/editorconfig-sections"
+            ];
+          };
+          lint = {
+            python.configFile = ./pyproject.toml;
+            javascript = true;
+          };
+          outdated = {
+            enable = true;
+            githubActions = true;
+            uv = true;
+          };
         }
       );
 
@@ -71,6 +117,7 @@
             lib
             nix-gritql
             system
+            pythonEnvsFor
             ;
           toolPkgs = toolPkgsFor system;
         }
@@ -91,7 +138,16 @@
 
       devShells = eachSystem (system: {
         default = (toolPkgsFor system).mkShellNoCC {
-          packages = project.${system}.packages ++ [ (toolPkgsFor system).just ];
+          packages = project.${system}.packages ++ [
+            (toolPkgsFor system).just
+            (toolPkgsFor system).uv
+            (pythonEnvsFor (toolPkgsFor system)).dev
+          ];
+          env = {
+            UV_NO_SYNC = "1";
+            UV_PYTHON = "${(pythonEnvsFor (toolPkgsFor system)).dev}/bin/python";
+            UV_PYTHON_DOWNLOADS = "never";
+          };
         };
       });
     };
