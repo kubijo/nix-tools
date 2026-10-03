@@ -8,6 +8,8 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-03
+
 ### Added
 
 - `just outdated` audits this checkout. Interactive reports show live progress and links to known public releases and
