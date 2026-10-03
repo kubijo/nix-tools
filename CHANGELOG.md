@@ -8,6 +8,8 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-03
+
 ### Added
 
 - Opt-in online outdated reports for Nix inputs, Cargo, UV, npm, pnpm, modern Yarn, Composer and GitHub Actions, with
