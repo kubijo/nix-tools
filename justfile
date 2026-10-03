@@ -14,9 +14,9 @@ format *args:
 lint *args:
     {{ nix_dev }} repochk {{ args }}
 
-# Query upstream versions; deliberately separate from cached checks.
+# Audit this checkout with the same app consumers run; deliberately separate from cached checks.
 outdated *args:
-    {{ nix_dev }} repo-outdated {{ args }}
+    nix run {{ flake_dir }}#outdated -- --root {{ flake_dir }} {{ args }}
 
 # Every check, naming each failure rather than stopping at the first.
 check *args:

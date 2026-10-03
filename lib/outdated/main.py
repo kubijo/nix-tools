@@ -1,6 +1,5 @@
-"""Online maintenance reports; never used as cached Nix check results."""
-
 import concurrent.futures
+import contextlib
 import json
 import os
 import pathlib
@@ -23,7 +22,26 @@ from common import (
 )
 from network import Client
 from providers import PROVIDERS
+from rich import box
+from rich.console import Console
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.style import Style
+from rich.table import Table
+from rich.text import Text
 from sources import nix_jobs, release_entry, workflow_jobs
+
+STATE_STYLES = {
+    'error': 'bold red',
+    'unknown': 'bright_black',
+    'blocked': 'red',
+    'outdated': 'yellow',
+    'ahead': 'cyan',
+    'up-to-date': 'green',
+    'pinned': 'blue',
+    'skipped': 'bright_black',
+}
+IDENTIFIER_STYLE = Style(color='bright_white', bgcolor='grey30', bold=True)
+AGENT_ENVS = ('CLAUDECODE', 'CURSOR_AGENT', 'GEMINI_CLI', 'CODEX_THREAD_ID', 'OPENCODE', 'IN_CLANKER', 'in-clanker')
 
 
 def clean(value):
@@ -151,6 +169,103 @@ def find_root(start, marker):
     return current
 
 
+def display_version(provider, value):
+    if provider == 'nix' and re.fullmatch(r'[0-9a-f]{40,64}', value):
+        return value[:10]
+    if value.startswith('sha256:') and len(value) > 25:
+        return value[:18] + '…'
+    return value
+
+
+def display_name(provider, name):
+    if provider == 'nix':
+        paths = name.split(', ')
+        if len(paths) > 1:
+            extra = len(paths) - 1
+            return f'{paths[0]} (+{extra} {"path" if extra == 1 else "paths"})'
+    return name
+
+
+def note_code(detail, used):
+    clause = re.split(r'[.;:]\s+', detail, maxsplit=1)[0]
+    words = re.findall(r'[a-z0-9]+', clause.lower())
+    selected = []
+    for word in words[:4]:
+        candidate = '-'.join([*selected, word])
+        if len(candidate) > 24:
+            break
+        selected.append(word)
+    base = '-'.join(selected) or 'detail'
+    code = base
+    suffix = 2
+    while code in used:
+        ending = f'-{suffix}'
+        code = base[: 24 - len(ending)].rstrip('-') + ending
+        suffix += 1
+    used.add(code)
+    return code
+
+
+def styled_detail(detail, identifiers):
+    rendered = Text(detail)
+    for identifier in sorted(set(identifiers), key=len, reverse=True):
+        pattern = rf'(?<![\w/.-]){re.escape(identifier)}(?![\w/.-])'
+        for match in re.finditer(pattern, detail):
+            rendered.stylize(IDENTIFIER_STYLE, match.start(), match.end())
+    return rendered
+
+
+def output_mode(no_color):
+    agent = any(os.environ.get(name) for name in AGENT_ENVS)
+    interactive = sys.stdout.isatty() and not agent and not os.environ.get('CI') and os.environ.get('TERM') != 'dumb'
+    force_color = os.environ.get('FORCE_COLOR')
+    forced = force_color not in (None, '', '0')
+    styled = forced or (interactive and force_color != '0' and not no_color and 'NO_COLOR' not in os.environ)
+    return interactive, styled, forced
+
+
+def version_parts(row):
+    current = display_version(row.provider, row.current)
+    latest = display_version(row.provider, row.latest) if row.latest and row.latest != row.current else ''
+    return current, latest
+
+
+def version_label(row):
+    current, latest = version_parts(row)
+    return f'{current} → {latest}' if current and latest else latest or current
+
+
+def single_line(value):
+    return re.sub(r'\s+', ' ', value).strip()
+
+
+def version_cell(row, links):
+    current, latest = version_parts(row)
+    rendered = Text()
+    current_url = row.current_url or (row.version_url if not latest else '')
+    if current:
+        style = Style(color='cyan', underline=True, link=current_url) if links and current_url else None
+        rendered.append(current, style=style)
+    if latest:
+        if current:
+            rendered.append(' → ')
+        style = Style(color='cyan', underline=True, link=row.version_url) if links and row.version_url else None
+        rendered.append(latest, style=style)
+    return rendered
+
+
+def finding_notes(results):
+    notes, identifiers, used = {}, {}, set()
+    for row in results:
+        if row.state == 'up-to-date' or not row.detail:
+            continue
+        if row.detail not in notes:
+            notes[row.detail] = note_code(row.detail, used)
+        if row.detail_identifiers:
+            identifiers.setdefault(row.detail, set()).update(row.detail_identifiers)
+    return notes, identifiers
+
+
 def report(results, json_output, no_color=False):
     for row in results:
         for field, value in row.json().items():
@@ -163,22 +278,107 @@ def report(results, json_output, no_color=False):
     if json_output:
         print(json.dumps(document, indent=2))
     else:
-        previous = None
-        color = sys.stdout.isatty() and not no_color and 'NO_COLOR' not in os.environ
+        notes, identifiers = finding_notes(results)
+        interactive, styled, forced = output_mode(no_color)
+        counts_label = ', '.join(f'{count} {name}' for name, count in counts.items())
+        if not interactive and not forced:
+            visible = [row for row in results if row.state != 'up-to-date']
+            for row in visible:
+                version = version_label(row)
+                suffix = f' {version}' if version else ''
+                if row.compatible:
+                    suffix += f' (compatible {row.compatible})'
+                note = f' [{notes[row.detail]}]' if row.detail else ''
+                name = display_name(row.provider, row.name)
+                print(single_line(f'{row.provider}: {row.state} {name}{suffix}{note}'))
+            for detail, note in notes.items():
+                print(f'{note}: {single_line(detail)}')
+            print()
+            print(f'OUTDATED: {state} ({counts_label})')
+            print()
+            return code
+        console = Console(
+            file=sys.stdout,
+            color_system='standard' if forced else 'auto',
+            force_terminal=styled,
+            no_color=not styled,
+            highlight=False,
+            width=None if sys.stdout.isatty() else 120,
+        )
+        groups = {}
         for row in results:
-            if row.provider != previous:
-                print(f'\n{row.provider}')
-                previous = row.provider
-            change = f' {row.current} -> {row.latest}' if row.latest else (f' {row.current}' if row.current else '')
-            line = f'  {row.state:12} {row.name}:{change}'
-            print(f'\x1b[90m{line}\x1b[0m' if color and row.state == 'unknown' else line)
-            if row.compatible:
-                print(f'               compatible: {row.compatible}')
-            if row.detail:
-                print('               ' + row.detail.replace('\n', '\n               '))
-        print(f'\nOUTDATED: {state} ({", ".join(f"{v} {k}" for k, v in counts.items())})')
+            groups.setdefault(row.provider, []).append(row)
+        for provider, rows in groups.items():
+            table = Table(title=provider, box=box.SQUARE, row_styles=['', 'on grey11'])
+            table.add_column('State', no_wrap=True, min_width=10)
+            table.add_column('Dependency', no_wrap=True, overflow='ellipsis', max_width=64)
+            table.add_column('Version', no_wrap=True, overflow='ellipsis', max_width=28)
+            table.add_column('Note', no_wrap=True)
+            for row in rows:
+                note = notes.get(row.detail, '')
+                if row.compatible:
+                    note = f'{note}; compatible: {row.compatible}'.lstrip('; ')
+                table.add_row(
+                    Text(row.state, style=STATE_STYLES[row.state]),
+                    Text(display_name(provider, row.name)),
+                    version_cell(row, interactive and styled),
+                    Text(note),
+                )
+            console.print(table)
+        if notes:
+            note_table = Table(title='Finding details', box=box.SQUARE, row_styles=['', 'on grey11'])
+            note_table.add_column('Code', no_wrap=True)
+            note_table.add_column('Meaning', overflow='fold', max_width=96)
+            for detail, note_key in notes.items():
+                note_table.add_row(Text(note_key), styled_detail(detail, identifiers.get(detail, ())))
+            console.print(note_table)
+        verdict = Text('OUTDATED: ', style='bold')
+        verdict.append(state, style={'ERROR': 'bold red', 'OUTDATED': 'bold yellow', 'UP-TO-DATE': 'bold green'}[state])
+        verdict.append(f' ({counts_label})', style='bold')
+        console.print()
+        console.print(verdict)
+        console.print()
 
     return code
+
+
+def progress_display(console):
+    return Progress(
+        SpinnerColumn(),
+        TextColumn('{task.description}'),
+        BarColumn(bar_width=24),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+        auto_refresh=True,
+        refresh_per_second=8,
+        transient=True,
+        expand=False,
+    )
+
+
+def run_jobs(work, concurrency, progress=None, task=None):
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = {pool.submit(guarded, *job): index for index, job in enumerate(work)}
+        batches: list[list[Result] | None] = [None] * len(work)
+
+        for future in concurrent.futures.as_completed(futures):
+            batches[futures[future]] = future.result()
+            if progress is not None:
+                progress.advance(task)
+    return [row for batch in batches if batch is not None for row in batch]
+
+
+def collect_jobs(config, root, client, console=None):
+    progress = progress_display(console) if console is not None else None
+    task = progress.add_task('Discovering inputs', total=None) if progress is not None else None
+    with progress if progress is not None else contextlib.nullcontext():
+        work = jobs(config, root, client)
+        if not work:
+            raise Failure('No providers or release entries are enabled')
+        if progress is not None:
+            progress.update(task, description='Checking dependencies', total=len(work), completed=0)
+        return run_jobs(work, config['concurrency'], progress, task)
 
 
 @dataclass
@@ -192,7 +392,7 @@ class Options:
     json: bool = False
     """Emit the versioned JSON report."""
     no_color: bool = False
-    """Plain output (also the default)."""
+    """Disable color in the Rich table."""
 
 
 def main():
@@ -201,13 +401,15 @@ def main():
     try:
         config = json.loads(options.config.read_text())
         root = options.root.resolve() if options.root else find_root(pathlib.Path.cwd(), config['treeRootFile'])
-        client = Client(config['timeout'], config['githubApi'], config.get('nvchecker', 'nvchecker'))
-        work = jobs(config, root, client)
-        if not work:
-            raise Failure('No providers or release entries are enabled')
-        with concurrent.futures.ThreadPoolExecutor(max_workers=config['concurrency']) as pool:
-            futures = [pool.submit(guarded, *job) for job in work]
-            results = [row for future in futures for row in future.result()]
+        client = Client(config['timeout'], config['githubApi'], config.get('nvchecker', 'nvchecker'), preflight=True)
+        interactive, styled, forced = output_mode(options.no_color)
+        live = interactive and styled and not options.json
+        progress_console = (
+            Console(file=sys.stdout, color_system='standard' if forced else 'auto', force_terminal=styled)
+            if live
+            else None
+        )
+        results = collect_jobs(config, root, client, progress_console)
     except Exception as error:  # noqa: BLE001 - preserve other providers and redact raw diagnostics
         detail = str(error) if isinstance(error, Failure) else f'Invalid report configuration ({type(error).__name__})'
         results = [Result('report', 'configuration', '.', 'error', detail=detail)]
