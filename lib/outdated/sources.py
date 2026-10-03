@@ -155,7 +155,7 @@ def nix_input(node, label, config, root, client):
 
         if version(ref) is not None:
             try:
-                tag, _ = client.release(repo)
+                tag, _ = client.release(repo, tags=True)
             except UnreadableSource as error:
                 return Result('nix', label, source, 'skipped', current, detail=str(error))
 

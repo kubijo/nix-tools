@@ -329,6 +329,7 @@ class Releases(Fixture):
         row = sources.nix_input(node, 'tools/dependency', {}, self.root, client)
         self.assertEqual(row.state, 'outdated')
         self.assertIn('owning top-level input: tools', row.detail)
+        client.release.assert_called_once_with('o/r', tags=True)
         client.commit.assert_called_with('o/r', 'v2.0')
         client.release.side_effect = common.UnreadableSource('No readable release')
         skipped = sources.nix_input(node, 'tools', {}, self.root, client)

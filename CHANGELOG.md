@@ -8,6 +8,11 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+### Fixed
+
+- GitHub Nix inputs pinned to version tags now check public tags directly, including repositories without GitHub
+  Releases.
+
 ## [0.7.0] - 2026-10-03
 
 ### Added

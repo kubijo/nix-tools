@@ -32,6 +32,7 @@ from providers import PROVIDERS
 class Registry(http.server.BaseHTTPRequestHandler):
     denied_status = 401
     release_status = 200
+    tag_status = 200
     release_tag = 'v2.0'
     release_tags = ('v1.0', 'v2.0', 'v3.0rc1', 'unrelated/v99.0')
 
@@ -45,7 +46,14 @@ class Registry(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if self.path.startswith(('/repos/', '/pypi/', '/api/v1/crates/')) and self.release_status != 200:
+        if self.path.endswith('/git/refs/tags') and self.tag_status != 200:
+            self.send_error(self.tag_status)
+            return
+        if (
+            self.path.startswith(('/repos/', '/pypi/', '/api/v1/crates/'))
+            and not self.path.endswith('/git/refs/tags')
+            and self.release_status != 200
+        ):
             self.send_error(self.release_status)
             return
         if self.path.startswith('/private/'):
@@ -333,6 +341,30 @@ class NativeClients(unittest.TestCase):
             with self.subTest(status=status), patch.object(Registry, 'release_status', status):
                 rows = main.guarded('releases', 'fixture', '.', lambda: client.release('owner/project'))
                 self.assertEqual([row.state for row in rows], ['error'])
+
+    def test_nix_version_tag_without_github_release(self):
+        client = self.release_client()
+        client.commit = Mock(return_value='a' * 40)
+        node = {
+            'locked': {'type': 'github', 'owner': 'owner', 'repo': 'project', 'rev': 'a' * 40},
+            'original': {'ref': 'v0.7.0'},
+        }
+        with (
+            patch.object(Registry, 'release_status', 404),
+            patch.object(Registry, 'release_tags', ('v0.6.0', 'v0.7.0', 'v0.8.0rc1')),
+        ):
+            with self.assertRaises(common.Failure):
+                client.release('owner/project')
+            row = sources.nix_input(node, 'nix-tools', {}, self.root, client)
+        self.assertEqual((row.state, row.current, row.latest), ('up-to-date', 'a' * 40, 'a' * 40))
+        self.assertIn('v0.7.0 -> v0.7.0', row.detail)
+        client.commit.assert_called_once_with('owner/project', 'v0.7.0')
+
+        with patch.object(Registry, 'tag_status', 503):
+            rows = main.guarded(
+                'nix', 'nix-tools', 'flake.lock', lambda: sources.nix_input(node, 'nix-tools', {}, self.root, client)
+            )
+        self.assertEqual([row.state for row in rows], ['error'])
 
     def test_nvchecker_git_url_is_one_quoted_argument(self):
         repository = self.root / 'repo; touch INJECTED'
