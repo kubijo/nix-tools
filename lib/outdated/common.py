@@ -33,9 +33,21 @@ class Result:
     compatible: str = ''
     latest: str = ''
     detail: str = ''
+    version_url: str = dataclasses.field(default='', repr=False, compare=False)
+    current_url: str = dataclasses.field(default='', repr=False, compare=False)
+    detail_identifiers: tuple[str, ...] = dataclasses.field(default=(), repr=False, compare=False)
 
     def json(self):
-        return dataclasses.asdict(self)
+        return {
+            'provider': self.provider,
+            'name': self.name,
+            'source': self.source,
+            'state': self.state,
+            'current': self.current,
+            'compatible': self.compatible,
+            'latest': self.latest,
+            'detail': self.detail,
+        }
 
 
 def version(value):

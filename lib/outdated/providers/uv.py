@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from common import Failure, Result, command_json, compare, external, relative, snapshot
+from sources import registry_url
 
 from .contract import ProviderConfig
 
@@ -49,7 +50,7 @@ def report(config: ProviderConfig, root: Path, timeout: float) -> Iterator[Resul
                     detail='UV did not report a version; current and failed registry access cannot be distinguished',
                 )
                 continue
-            yield compare(
+            row = compare(
                 'uv',
                 name,
                 'uv.lock',
@@ -57,6 +58,11 @@ def report(config: ProviderConfig, root: Path, timeout: float) -> Iterator[Resul
                 item['latest_version'],
                 detail='Upstream availability; not a manifest-compatible resolution',
             )
+            registry = source['registry']
+            if isinstance(registry, dict) and registry.get('url', '').rstrip('/') == 'https://pypi.org/simple':
+                row.version_url = registry_url('pypi', name, item['latest_version'])
+                row.current_url = registry_url('pypi', name, current)
+            yield row
         else:
             yield external(
                 'uv', name, 'uv.lock', current, 'No registry candidate; configure an explicit release policy'

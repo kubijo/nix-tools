@@ -1,6 +1,7 @@
 """Release entries, Nix input graphs and GitHub workflow references."""
 
 import re
+from urllib.parse import quote
 
 import yaml
 from common import (
@@ -15,6 +16,25 @@ from common import (
     validate_adapter,
     version,
 )
+
+
+def github_url(repo, kind, value):
+    if not re.fullmatch(r'[\w.-]+/[\w.-]+', repo):
+        return ''
+    return f'https://github.com/{repo}/{kind}/{quote(value, safe="")}'
+
+
+def registry_url(kind, project, value):
+    if not isinstance(project, str) or not project or not value:
+        return ''
+    name, release = quote(project, safe='@/'), quote(value, safe='')
+    if kind == 'pypi':
+        return f'https://pypi.org/project/{name}/{release}/'
+    if kind == 'npm':
+        return f'https://www.npmjs.com/package/{name}/v/{release}'
+    if kind == 'crates':
+        return f'https://crates.io/crates/{name}/{release}'
+    return ''
 
 
 def release_entry(client, item, provider='tools', root=None):
@@ -44,7 +64,7 @@ def release_entry(client, item, provider='tools', root=None):
     kind = item.get('provider', 'github')
     try:
         if kind == 'github':
-            _, latest = client.release(
+            tag, latest = client.release(
                 item['repo'],
                 tags=item.get('tags', False),
                 **({'tagPattern': item['tagPattern']} if 'tagPattern' in item else {}),
@@ -60,11 +80,20 @@ def release_entry(client, item, provider='tools', root=None):
         if len(rows) != 1 or rows[0].current != current or rows[0].latest != latest:
             raise Failure('Invalid semantic version comparison report')
         rows[0].name = name
+        rows[0].version_url = registry_url(kind, item.get('project'), latest)
+        rows[0].current_url = registry_url(kind, item.get('project'), current)
         return rows[0]
 
     result = compare(provider, name, source, current, latest)
     if result.state == 'unknown':
         result.state = 'skipped'
+    result.version_url = (
+        github_url(item['repo'], 'tree' if item.get('tags') else 'releases/tag', tag)
+        if kind == 'github'
+        else registry_url(kind, item.get('project'), latest)
+    )
+    if kind in ('pypi', 'npm', 'crates'):
+        result.current_url = registry_url(kind, item.get('project'), current)
     return result
 
 
@@ -143,10 +172,16 @@ def nix_input(node, label, config, root, client):
     locked, original = node['locked'], node.get('original', {})
     current = locked.get('rev', locked.get('narHash', ''))
     source = config.get('lockFile', 'flake.lock') + ':' + label
-    detail = 'Update the owning top-level input: ' + ', '.join(sorted({p.split('/')[0] for p in label.split(', ')}))
+    owners = tuple(sorted({p.split('/')[0] for p in label.split(', ')}))
+    detail = 'Update the owning top-level input: ' + ', '.join(owners)
 
     if original.get('rev'):
-        return Result('nix', label, source, 'pinned', current, detail='Explicit revision pin. ' + detail)
+        row = Result('nix', label, source, 'pinned', current, detail='Explicit revision pin. ' + detail)
+        if locked.get('type') == 'github':
+            row.version_url = github_url(f'{locked["owner"]}/{locked["repo"]}', 'commit', current)
+            row.current_url = row.version_url
+        row.detail_identifiers = owners
+        return row
 
     kind, ref = locked['type'], original.get('ref', 'HEAD')
     if kind == 'github':
@@ -168,6 +203,11 @@ def nix_input(node, label, config, root, client):
             current,
             latest=latest,
             detail=f'{repo}: {ref} -> {tag}. {detail}',
+            version_url=github_url(
+                repo, 'tree' if version(ref) is not None else 'commit', tag if version(ref) is not None else latest
+            ),
+            current_url=github_url(repo, 'commit', current),
+            detail_identifiers=(repo, *owners),
         )
 
     if kind == 'git':
@@ -197,6 +237,7 @@ def nix_input(node, label, config, root, client):
             current,
             latest=latest,
             detail=detail,
+            detail_identifiers=owners,
         )
 
     return Result(
@@ -276,4 +317,6 @@ def action(ref, source, client):
         current,
         latest=tag,
         detail='Compared resolved commits; a newer release may require migration',
+        version_url=github_url(repo, 'releases/tag', tag),
+        current_url=github_url(repo, 'commit', before),
     )

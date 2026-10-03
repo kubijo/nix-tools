@@ -8,6 +8,21 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+### Added
+
+- `just outdated` audits this checkout. Interactive reports show live progress and links to known public releases and
+  refs.
+
+### Changed
+
+- Outdated reports use compact tables on terminals and terse plain text for pipes, CI and coding agents. `NO_COLOR` and
+  `FORCE_COLOR` control styling; JSON output keeps its existing schema.
+
+### Fixed
+
+- GitHub quota and authentication failures retain actionable diagnostics through preflight. Every displayed finding code
+  now has a definition.
+
 ## [0.7.1] - 2026-10-03
 
 ### Fixed

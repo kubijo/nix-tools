@@ -8,6 +8,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from collections import Counter
 from email.message import Message
@@ -21,6 +22,11 @@ import network
 import releases
 import sources
 from providers import PROVIDERS, cargo, composer, npm, pnpm, uv, yarn
+
+
+class Terminal(io.StringIO):
+    def isatty(self):
+        return True
 
 
 class Fixture(unittest.TestCase):
@@ -163,10 +169,6 @@ class Protocol(Fixture):
         self.assertEqual(json.loads(output.getvalue())['schemaVersion'], 1)
 
     def test_unknown_is_gray_only_on_interactive_text_output(self):
-        class Terminal(io.StringIO):
-            def isatty(self):
-                return True
-
         row = common.Result('uv', 'package', 'uv.lock', 'unknown', '1.0')
         for json_output, no_color, colored in ((False, False, True), (False, True, False), (True, False, False)):
             with self.subTest(json_output=json_output, no_color=no_color), patch.dict(os.environ, {}, clear=True):
@@ -178,7 +180,45 @@ class Protocol(Fixture):
             output = Terminal()
             with contextlib.redirect_stdout(output):
                 main.report([row], False)
-            self.assertNotIn('\x1b[90m', output.getvalue())
+            self.assertNotIn('\x1b', output.getvalue())
+
+    def test_force_color_overrides_no_color_and_nonterminal_heuristics(self):
+        row = common.Result('uv', 'package', 'uv.lock', 'unknown', '1.0')
+        for environment, no_color, styled in (
+            ({'FORCE_COLOR': '1', 'NO_COLOR': '1', 'TERM': 'dumb', 'CI': '1'}, True, True),
+            ({'FORCE_COLOR': '0', 'NO_COLOR': '1', 'TERM': 'xterm-256color'}, False, False),
+            ({'FORCE_COLOR': '0', 'TERM': 'xterm-256color'}, False, False),
+            ({'FORCE_COLOR': '1', 'TERM': 'dumb'}, False, True),
+            ({'TERM': 'xterm-256color'}, False, False),
+        ):
+            with self.subTest(environment=environment), patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    self.assertEqual(main.report([row], False, no_color), 2)
+                self.assertEqual('\x1b[' in output.getvalue(), styled)
+
+    def test_agent_markers_select_terse_output_even_on_a_tty(self):
+        row = common.Result('tools', 'tool', '.', 'outdated', '1', latest='2')
+        for marker in main.AGENT_ENVS:
+            with self.subTest(marker=marker), patch.dict(os.environ, {marker: '1', 'TERM': 'xterm'}, clear=True):
+                output = Terminal()
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(main.report([row], False), 1)
+                    self.assertEqual(main.output_mode(False), (False, False, False))
+                self.assertIn('tools: outdated tool 1 → 2', output.getvalue())
+                self.assertNotIn('│', output.getvalue())
+                self.assertNotIn('\x1b', output.getvalue())
+
+        with (
+            patch.dict(os.environ, {'CODEX_THREAD_ID': '', 'TERM': 'xterm'}, clear=True),
+            contextlib.redirect_stdout(Terminal()),
+        ):
+            self.assertEqual(main.output_mode(False), (True, True, False))
+        with patch.dict(os.environ, {'CODEX_THREAD_ID': 'thread', 'FORCE_COLOR': '1', 'TERM': 'xterm'}, clear=True):
+            output = Terminal()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(main.report([row], False), 1)
+            self.assertIn('│', output.getvalue())
+            self.assertIn('\x1b[', output.getvalue())
 
     def test_snapshot_preserves_files_and_rejects_links(self):
         original = self.write('manifest', 'original')
@@ -305,6 +345,40 @@ class Releases(Fixture):
         client.registry_release.return_value = '1.0'
         row = sources.release_entry(client, {'name': 'thing', 'provider': 'pypi', 'project': 'thing', 'version': '1.0'})
         self.assertEqual(row.state, 'up-to-date')
+        self.assertEqual(row.version_url, 'https://pypi.org/project/thing/1.0/')
+        self.assertEqual(row.current_url, 'https://pypi.org/project/thing/1.0/')
+        self.assertEqual(
+            list(row.json()),
+            ['provider', 'name', 'source', 'state', 'current', 'compatible', 'latest', 'detail'],
+        )
+
+    def test_release_links_follow_verified_source_and_policy(self):
+        client = Mock()
+        client.release.return_value = ('v2.0+stable', '2.0')
+        release = sources.release_entry(client, {'name': 'tool', 'repo': 'owner/repo', 'version': '1.0'})
+        self.assertEqual(release.version_url, 'https://github.com/owner/repo/releases/tag/v2.0%2Bstable')
+        self.assertEqual(release.current_url, '')
+        tagged = sources.release_entry(client, {'name': 'tool', 'repo': 'owner/repo', 'version': '1.0', 'tags': True})
+        self.assertEqual(tagged.version_url, 'https://github.com/owner/repo/tree/v2.0%2Bstable')
+        client.commit.return_value = 'b' * 40
+        action = sources.action('owner/repo@v1', 'workflow.yml', client)
+        self.assertEqual(action.version_url, 'https://github.com/owner/repo/releases/tag/v2.0%2Bstable')
+        for kind, project, expected in (
+            ('npm', '@scope/tool', 'https://www.npmjs.com/package/@scope/tool/v/2.0'),
+            ('crates', 'tool', 'https://crates.io/crates/tool/2.0'),
+        ):
+            with self.subTest(kind=kind), patch.object(sources, 'command_json') as compare_report:
+                compare_report.return_value = {
+                    'schemaVersion': 1,
+                    'results': [{'name': project, 'state': 'outdated', 'current': '1.0', 'latest': '2.0'}],
+                }
+                client.registry_release.return_value = '2.0'
+                row = sources.release_entry(
+                    client,
+                    {'name': 'tool', 'provider': kind, 'project': project, 'version': '1.0', 'reporter': 'report'},
+                )
+                self.assertEqual(row.version_url, expected)
+                self.assertIn('/1.0', row.current_url)
 
     def test_nix_follows_and_owners(self):
         root_inputs: dict[str, str | list[str]] = {'tools': 'tools', 'pkgs': 'pkgs'}
@@ -328,6 +402,9 @@ class Releases(Fixture):
         node = {'locked': {'type': 'github', 'owner': 'o', 'repo': 'r', 'rev': 'a' * 40}, 'original': {'ref': 'v1.0'}}
         row = sources.nix_input(node, 'tools/dependency', {}, self.root, client)
         self.assertEqual(row.state, 'outdated')
+        self.assertEqual(row.version_url, 'https://github.com/o/r/tree/v2.0')
+        self.assertEqual(row.current_url, 'https://github.com/o/r/commit/' + 'a' * 40)
+        self.assertEqual(row.detail_identifiers, ('o/r', 'tools'))
         self.assertIn('owning top-level input: tools', row.detail)
         client.release.assert_called_once_with('o/r', tags=True)
         client.commit.assert_called_with('o/r', 'v2.0')
@@ -337,7 +414,12 @@ class Releases(Fixture):
         skipped = sources.action('o/r@v1.0', 'workflow.yml', client)
         self.assertEqual((skipped.state, skipped.current), ('skipped', 'v1.0'))
         node['original'] = {'rev': 'a' * 40}
-        self.assertEqual(sources.nix_input(node, 'tools', {}, self.root, client).state, 'pinned')
+        pinned = sources.nix_input(node, 'tools', {}, self.root, client)
+        self.assertEqual(pinned.state, 'pinned')
+        self.assertEqual(pinned.version_url, 'https://github.com/o/r/commit/' + 'a' * 40)
+        node['original'] = {'ref': 'main'}
+        branch = sources.nix_input(node, 'tools', {}, self.root, client)
+        self.assertEqual(branch.version_url, 'https://github.com/o/r/commit/' + 'b' * 40)
         node['locked']['type'] = 'path'
         node['original'] = {}
         self.assertEqual(sources.nix_input(node, 'tools', {}, self.root, client).state, 'unknown')
@@ -401,6 +483,12 @@ source={git="https://example.test/repo"}
             rows = list(uv.report({'exe': 'uv'}, self.root, 2))
         self.assertEqual([r.state for r in rows], ['outdated', 'skipped', 'unknown'])
         self.assertIn('--locked', command.call_args.args[0])
+        self.assertEqual(rows[0].version_url, '')
+        response['resolution']['p']['source']['registry']['url'] = 'https://pypi.org/simple'
+        with patch.object(uv, 'command_json', return_value=response):
+            rows = list(uv.report({'exe': 'uv'}, self.root, 2))
+        self.assertEqual(rows[0].version_url, 'https://pypi.org/project/pkg/2.0/')
+        self.assertEqual(rows[0].current_url, 'https://pypi.org/project/pkg/1.0/')
         response['resolution']['p'].pop('latest_version')
         with patch.object(uv, 'command_json', return_value=response):
             rows = list(uv.report({'exe': 'uv'}, self.root, 2))
@@ -561,6 +649,354 @@ class EdgeCases(Fixture):
                 client.api('limited')
             self.assertNotIn('secret', str(caught.exception))
 
+    def test_github_quota_preflight_stops_repeated_lookups(self):
+        client = network.Client(preflight=True)
+        quota = {'resources': {'core': {'remaining': 0, 'reset': 1791025832}}}
+        with (
+            patch.object(client, '_get', return_value=quota) as request,
+            patch.object(network, 'source') as release,
+        ):
+            for call in (lambda: client.release('owner/repo'), lambda: client.api('repos/owner/repo')):
+                with self.assertRaisesRegex(common.Failure, 'GitHub API quota exhausted') as caught:
+                    call()
+                self.assertIn('GH_TOKEN or GITHUB_TOKEN', str(caught.exception))
+            self.assertEqual(request.call_count, 1)
+            release.assert_not_called()
+
+    def test_github_quota_preflight_allows_available_quota(self):
+        client = network.Client(preflight=True)
+        quota = {'resources': {'core': {'remaining': 4, 'reset': 1791025832}}}
+        with (
+            patch.object(client, '_get', return_value=quota) as request,
+            patch.object(network, 'source', return_value=('v2', '2')) as release,
+        ):
+            self.assertEqual(client.release('owner/repo'), ('v2', '2'))
+            self.assertEqual(client.release('owner/repo'), ('v2', '2'))
+            request.assert_called_once_with('https://api.github.com/rate_limit', github=True)
+            self.assertEqual(release.call_count, 2)
+
+    def test_github_quota_preflight_failure_does_not_block_release(self):
+        for document in (
+            [],
+            {'resources': []},
+            {'resources': {'core': []}},
+            {'resources': {'core': {'remaining': False}}},
+        ):
+            with self.subTest(document=document):
+                client = network.Client(preflight=True)
+                with (
+                    patch.object(client, '_get', return_value=document) as probe,
+                    patch.object(network, 'source', return_value=('v2', '2')) as release,
+                ):
+                    self.assertEqual(client.release('owner/repo'), ('v2', '2'))
+                    self.assertEqual(client.release('owner/repo'), ('v2', '2'))
+                    probe.assert_called_once()
+                    self.assertEqual(release.call_count, 2)
+        client = network.Client(preflight=True)
+        with (
+            patch.object(client, '_get', side_effect=common.Failure('Probe unavailable')) as probe,
+            patch.object(network, 'source', return_value=('v2', '2')) as release,
+        ):
+            self.assertEqual(client.release('owner/repo'), ('v2', '2'))
+            self.assertEqual(client.release('owner/repo'), ('v2', '2'))
+            probe.assert_called_once()
+            self.assertEqual(release.call_count, 2)
+        self.assertIn('HTTP 403', str(network.Client._http_failure(403, None, True)))
+
+    def test_github_quota_preflight_preserves_confirmed_access_failures(self):
+        for code, headers, diagnostic in (
+            (403, {'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1791025832'}, 'quota exhausted'),
+            (401, {}, 'authentication failed'),
+        ):
+            with self.subTest(code=code):
+                client = network.Client(preflight=True)
+                failure = client._http_failure(code, headers, True)
+                with (
+                    patch.object(client, '_get', side_effect=failure) as probe,
+                    patch.object(network, 'source') as release,
+                ):
+                    for call, target in (
+                        (client.release, 'owner/repo'),
+                        (client.api, 'repos/owner/repo'),
+                    ):
+                        with self.assertRaisesRegex(common.Failure, diagnostic):
+                            call(target)
+                    probe.assert_called_once()
+                    release.assert_not_called()
+
+    def test_github_rate_limit_headers_are_actionable_and_safe(self):
+        import urllib.error
+
+        headers = Message()
+        headers['x-ratelimit-remaining'] = '0'
+        headers['x-ratelimit-reset'] = '1791025832'
+        opener = MagicMock()
+        opener.open.side_effect = urllib.error.HTTPError('https://secret@example', 403, 'private', headers, None)
+        with (
+            patch.object(network.urllib.request, 'build_opener', return_value=opener),
+            self.assertRaisesRegex(common.Failure, 'GitHub API quota exhausted') as caught,
+        ):
+            network.Client().api('repos/owner/repo')
+        self.assertNotIn('secret', str(caught.exception))
+        self.assertIn('UTC', str(caught.exception))
+
+    def test_rich_table_keeps_rows_and_deduplicates_finding_details(self):
+        rows = [
+            common.Result('githubActions', name, '.', 'error', detail='GitHub API quota exhausted')
+            for name in ('one', 'two', 'three')
+        ]
+        with contextlib.redirect_stdout(io.StringIO()) as plain:
+            self.assertEqual(main.report(rows, False), 2)
+        for value in ('one', 'two', 'three', 'github-api-quota', 'OUTDATED: ERROR'):
+            self.assertIn(value, plain.getvalue())
+        self.assertNotIn('│', plain.getvalue())
+        self.assertEqual(plain.getvalue().count('GitHub API quota exhausted'), 1)
+        with contextlib.redirect_stdout(io.StringIO()) as machine:
+            self.assertEqual(main.report(rows, True), 2)
+        self.assertEqual(len(json.loads(machine.getvalue())['results']), 3)
+
+    def test_redirected_report_is_terse_without_hiding_skips_or_compatibility(self):
+        rows = [
+            common.Result('tools', 'current-tool', '.', 'up-to-date', '1.0'),
+            common.Result('tools', 'local-tool', '.', 'skipped', '1.0', detail='Local package'),
+            common.Result('tools', 'pinned-tool', '.', 'pinned', '1.0', detail='Explicit revision pin'),
+            common.Result('tools', 'old-tool', '.', 'outdated', '1.0', '1.5', '2.0', 'New release'),
+        ]
+        with contextlib.redirect_stdout(io.StringIO()) as plain:
+            self.assertEqual(main.report(rows, False), 1)
+        self.assertEqual(
+            plain.getvalue().rstrip('\n').splitlines()[-1],
+            'OUTDATED: OUTDATED (1 outdated, 1 pinned, 1 skipped, 1 up-to-date)',
+        )
+        self.assertIn('\n\nOUTDATED: OUTDATED (', plain.getvalue())
+        self.assertTrue(plain.getvalue().endswith(')\n\n'))
+        self.assertIn('old-tool 1.0 → 2.0 (compatible 1.5)', plain.getvalue())
+        self.assertNotIn('current-tool', plain.getvalue())
+        self.assertIn('local-tool', plain.getvalue())
+        self.assertIn('pinned-tool', plain.getvalue())
+        self.assertIn('local-package: Local package', plain.getvalue())
+        self.assertIn('[new-release]', plain.getvalue())
+        self.assertIn('new-release: New release', plain.getvalue())
+        self.assertNotIn('\x1b', plain.getvalue())
+        adapter = common.Result(
+            'adapter:application', 'runtime', '.', 'outdated', '1.0', latest='2.0', detail='Upgrade breaks target CPU'
+        )
+        with contextlib.redirect_stdout(io.StringIO()) as policy:
+            self.assertEqual(main.report([adapter], False), 1)
+        self.assertIn('upgrade-breaks-target: Upgrade breaks target CPU', policy.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()) as machine:
+            self.assertEqual(main.report(rows, True), 1)
+        self.assertEqual(len(json.loads(machine.getvalue())['results']), 4)
+
+    def test_terse_adapter_fields_cannot_forge_a_verdict_line(self):
+        forged = 'OUTDATED: UP-TO-DATE (1 up-to-date)'
+        document = {
+            'schemaVersion': 1,
+            'results': [
+                {
+                    'name': f'entry\n{forged}',
+                    'state': 'error',
+                    'current': f'1\n{forged}',
+                    'compatible': f'1.5\n{forged}',
+                    'latest': f'2\n{forged}',
+                    'detail': f'Lookup failed\n{forged}',
+                }
+            ],
+        }
+        rows = common.validate_adapter(document, 'adapter:fixture', '.')
+        with contextlib.redirect_stdout(io.StringIO()) as plain:
+            self.assertEqual(main.report(rows, False), 2)
+        lines = plain.getvalue().splitlines()
+        self.assertEqual([line for line in lines if line.startswith('OUTDATED:')], ['OUTDATED: ERROR (1 error)'])
+        self.assertEqual(plain.getvalue().rstrip('\n').splitlines()[-1], 'OUTDATED: ERROR (1 error)')
+        self.assertIn('\n\nOUTDATED: ERROR (1 error)\n\n', plain.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()) as machine:
+            self.assertEqual(main.report(rows, True), 2)
+        self.assertEqual(json.loads(machine.getvalue())['results'][0]['current'], f'1\n{forged}')
+
+    def test_note_codes_are_readable_and_disambiguate_similar_explanations(self):
+        used = set()
+        self.assertEqual(main.note_code('GitHub API quota exhausted; retry later', used), 'github-api-quota')
+        self.assertEqual(main.note_code('NixOS/nixpkgs: branch moved', used), 'nixos-nixpkgs')
+        self.assertEqual(main.note_code('NixOS/nixpkgs: another branch moved', used), 'nixos-nixpkgs-2')
+        self.assertEqual(main.note_code('UV did not report a version; source failed', used), 'uv-did-not-report')
+
+    def test_finding_details_style_known_identifiers_without_changing_json(self):
+        detail = 'NixOS/nixpkgs: main -> stable. Update the owning top-level input: nix-gritql, uv2nix'
+        identifiers = ('NixOS/nixpkgs', 'nix-gritql', 'uv2nix')
+        styled = main.styled_detail(detail, identifiers)
+        self.assertEqual(
+            {styled.plain[span.start : span.end] for span in styled.spans},
+            set(identifiers),
+        )
+        assert main.IDENTIFIER_STYLE.color is not None
+        self.assertEqual(main.IDENTIFIER_STYLE.color.name, 'bright_white')
+        row = common.Result('nix', 'nix-gritql', '.', 'outdated', detail=detail, detail_identifiers=identifiers)
+        self.assertNotIn('detail_identifiers', row.json())
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(main.report([row], True), 1)
+        self.assertEqual(json.loads(output.getvalue())['results'][0]['detail'], detail)
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(main.report([row], False), 1)
+        self.assertLess(max(map(len, output.getvalue().splitlines())), 120)
+
+        with patch.dict(os.environ, {'TERM': 'xterm-256color', 'COLUMNS': '160'}, clear=True):
+            output = Terminal()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(main.report([row], False), 1)
+        self.assertIn('Finding details', output.getvalue())
+        self.assertIn('NixOS/nixpkgs', output.getvalue())
+
+        routine = common.Result('uv', 'package', '.', 'outdated', '1', latest='2', detail='Upstream availability')
+        with patch.dict(os.environ, {'TERM': 'xterm-256color'}, clear=True):
+            output = Terminal()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(main.report([routine], False), 1)
+        self.assertIn('Finding details', output.getvalue())
+        self.assertIn('upstream-availability', output.getvalue())
+        self.assertIn('Upstream availability', output.getvalue())
+
+    def test_rich_table_compacts_nix_paths_and_revisions_but_json_retains_them(self):
+        first = 'nix-tools/pyproject-build-systems/nixpkgs'
+        label = f'{first}, nix-tools/uv2nix/nixpkgs, uv2nix/nixpkgs'
+        revision = 'a' * 40
+        row = common.Result('nix', label, 'flake.lock', 'up-to-date', revision, latest=revision, detail='Done')
+
+        with (
+            patch.dict(os.environ, {'TERM': 'xterm-256color', 'COLUMNS': '160'}, clear=True),
+            contextlib.redirect_stdout(Terminal()) as plain,
+        ):
+            self.assertEqual(main.report([row], False), 0)
+        self.assertIn('(+2 paths)', plain.getvalue())
+        self.assertIn('a' * 10, plain.getvalue())
+        self.assertNotIn(revision, plain.getvalue())
+        self.assertNotIn('Done', plain.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()) as machine:
+            self.assertEqual(main.report([row], True), 0)
+        self.assertEqual(json.loads(machine.getvalue())['results'][0]['name'], label)
+        self.assertEqual(json.loads(machine.getvalue())['results'][0]['current'], revision)
+
+    def test_rich_table_stripes_tty_rows_without_interpreting_names_as_markup(self):
+        rows = [
+            common.Result('tools', '[red]literal[/red]', '.', 'outdated', '1', latest='2'),
+            common.Result('tools', 'second', '.', 'up-to-date', '2', latest='2'),
+        ]
+        output = Terminal()
+        with patch.dict(os.environ, {'TERM': 'xterm-256color'}, clear=True), contextlib.redirect_stdout(output):
+            self.assertEqual(main.report(rows, False), 1)
+        self.assertIn('[red]literal[/red]', output.getvalue())
+        self.assertIn('\x1b[48', output.getvalue())
+
+    def test_rich_tables_use_content_width_and_terminal_only_release_links(self):
+        url = 'https://github.com/owner/repo/releases/tag/v2.0'
+        old_url = 'https://github.com/owner/repo/releases/tag/v1.0'
+        row = common.Result(
+            'releases', 'tool', '.', 'outdated', '1.0', latest='2.0', version_url=url, current_url=old_url
+        )
+        cell = main.version_cell(row, True)
+        self.assertEqual(cell.plain, '1.0 → 2.0')
+        self.assertEqual(
+            [(cell.plain[s.start : s.end], s.style.link) for s in cell.spans], [('1.0', old_url), ('2.0', url)]
+        )
+        with patch.dict(os.environ, {'TERM': 'xterm-256color', 'COLUMNS': '160'}, clear=True):
+            output = Terminal()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(main.report([row], False), 1)
+            self.assertIn(';' + old_url + '\x1b\\', output.getvalue())
+            self.assertIn(';' + url + '\x1b\\', output.getvalue())
+            self.assertIn('│', output.getvalue())
+            self.assertIn('\n\x1b[1mOUTDATED:', output.getvalue())
+            self.assertTrue(output.getvalue().endswith('\n\n'))
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(main.report([row], False), 1)
+            self.assertNotIn('\x1b]8;;', output.getvalue())
+            self.assertNotIn(url, output.getvalue())
+            self.assertNotIn('│', output.getvalue())
+            self.assertLess(max(map(len, output.getvalue().splitlines())), 100)
+            output = Terminal()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(main.report([row], True), 1)
+            self.assertNotIn('\x1b]8;;', output.getvalue())
+            self.assertNotIn('version_url', output.getvalue())
+            output = Terminal()
+            with patch.dict(os.environ, {'CI': '1'}), contextlib.redirect_stdout(output):
+                self.assertEqual(main.report([row], False), 1)
+            self.assertNotIn('\x1b]8;;', output.getvalue())
+            output = Terminal()
+            with patch.dict(os.environ, {'NO_COLOR': '1'}), contextlib.redirect_stdout(output):
+                self.assertEqual(main.report([row], False), 1)
+            self.assertNotIn('\x1b', output.getvalue())
+            output = Terminal()
+            with patch.dict(os.environ, {'NO_COLOR': '1', 'FORCE_COLOR': '1'}), contextlib.redirect_stdout(output):
+                self.assertEqual(main.report([row], False), 1)
+            self.assertIn(';' + url + '\x1b\\', output.getvalue())
+        no_old = common.Result('releases', 'tool', '.', 'outdated', '1.0', latest='2.0', version_url=url)
+        cell = main.version_cell(no_old, True)
+        self.assertEqual([(cell.plain[s.start : s.end], s.style.link) for s in cell.spans], [('2.0', url)])
+
+    def test_narrow_terminal_keeps_state_readable(self):
+        row = common.Result('nix', 'long-repository-name/long-input-name', '.', 'up-to-date', 'a' * 40)
+        with patch.dict(os.environ, {'TERM': 'xterm-256color', 'COLUMNS': '80'}, clear=True):
+            output = Terminal()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(main.report([row], False), 0)
+        self.assertIn('up-to-date', output.getvalue())
+
+    def test_progress_uses_completed_jobs_but_preserves_report_order(self):
+        release_first = threading.Event()
+
+        def first():
+            if not release_first.wait(2):
+                raise AssertionError('The first job blocked progress')
+            return common.Result('test', 'first', '.', 'up-to-date')
+
+        class ProgressProbe:
+            def __init__(self):
+                self.started = False
+                self.calls = []
+
+            def __enter__(self):
+                self.started = True
+                return self
+
+            def __exit__(self, *args):
+                self.started = False
+
+            def add_task(self, description, total):
+                self.calls.append(('add', description, total))
+                return 7
+
+            def update(self, task, **kwargs):
+                self.calls.append(('update', task, kwargs))
+
+            def advance(self, task):
+                self.calls.append(('advance', task))
+                if sum(call[0] == 'advance' for call in self.calls) == 1:
+                    release_first.set()
+
+        probe = ProgressProbe()
+        jobs = [
+            ('test', 'first', '.', first),
+            ('test', 'second', '.', lambda: common.Result('test', 'second', '.', 'up-to-date')),
+        ]
+
+        def inventory(*args):
+            self.assertTrue(probe.started)
+            self.assertEqual(probe.calls[0], ('add', 'Discovering inputs', None))
+            return jobs
+
+        with (
+            patch.object(main, 'progress_display', return_value=probe),
+            patch.object(main, 'jobs', side_effect=inventory),
+        ):
+            rows = main.collect_jobs({'concurrency': 2}, self.root, Mock(), Mock())
+        self.assertEqual([row.name for row in rows], ['first', 'second'])
+        self.assertEqual(
+            probe.calls[1], ('update', 7, {'description': 'Checking dependencies', 'total': 2, 'completed': 0})
+        )
+        self.assertEqual(probe.calls[2:], [('advance', 7), ('advance', 7)])
+
     def test_release_policy_custom_patterns_and_empty(self):
         client = network.Client()
         with patch.object(releases, 'lookup', return_value='cli/v2.0'):
@@ -685,6 +1121,7 @@ class EdgeCases(Fixture):
         )
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn('OUTDATED: OUTDATED', result.stdout)
+        self.assertNotIn('Checking dependencies', result.stdout)
 
     def test_each_project_backend_preserves_original_on_failure(self):
         self.write('Cargo.toml', '[workspace]\n')
