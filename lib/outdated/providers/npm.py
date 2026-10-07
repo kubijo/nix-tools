@@ -3,6 +3,7 @@
 import shutil
 from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 
 from common import Failure, Result, command_json, records, relative, snapshot, validate_adapter
 
@@ -10,8 +11,8 @@ from .contract import ProviderConfig
 
 
 def report(config: ProviderConfig, root: Path, timeout: float) -> Iterator[Result]:
-    relative(root, 'package.json')
-    relative(root, 'package-lock.json')
+    _ = relative(root, 'package.json')
+    _ = relative(root, 'package-lock.json')
     executable = shutil.which(config['exe'])
     if executable is None:
         raise Failure('Configured npm executable is missing')
@@ -23,4 +24,8 @@ def report(config: ProviderConfig, root: Path, timeout: float) -> Iterator[Resul
     for record in records(document, 'results'):
         item = record.copy()
         source = item.pop('source')
-        yield from validate_adapter({'schemaVersion': document['schemaVersion'], 'results': [item]}, 'npm', source)
+        if not isinstance(source, str):
+            raise Failure('Unsupported npm source field')
+        yield from validate_adapter(
+            {'schemaVersion': cast(dict[str, object], document)['schemaVersion'], 'results': [item]}, 'npm', source
+        )

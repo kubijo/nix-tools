@@ -14,17 +14,28 @@ format *args:
 lint *args:
     {{ nix_dev }} repochk {{ args }}
 
+# Type-check Python helpers and tests.
+[no-exit-message]
+typecheck:
+    @{{ nix_dev }} bash -o pipefail -c 'basedpyright --project "{{ flake_dir }}/pyproject.toml" --pythonpath "$UV_PYTHON" --outputjson | "$UV_PYTHON" "{{ flake_dir }}/lib/basedpyright_report.py" "{{ flake_dir }}"'
+
+# Check Python lock consistency offline.
+[no-exit-message]
+lockcheck:
+    @{{ nix_dev }} bash -c 'uv lock --project "{{ flake_dir }}" --quiet --check --offline --no-cache --python "$UV_PYTHON"'
+
 # Audit this checkout with the same app consumers run; deliberately separate from cached checks.
 outdated *args:
     nix run {{ flake_dir }}#outdated -- --root {{ flake_dir }} {{ args }}
 
-# Every check, naming each failure rather than stopping at the first.
+# Run flake checks; pass -L for full build logs.
+[no-exit-message]
 check *args:
-    nix flake check {{ flake_dir }} -L --keep-going --quiet {{ args }}
+    @nix flake check {{ flake_dir }} --keep-going --quiet --option warn-dirty false {{ args }}
 
 # `flake check` skips systems it cannot build, so only this reads every one of them.
 outputs:
-    nix flake show {{ flake_dir }} --all-systems --quiet
+    @nix flake show {{ flake_dir }} --all-systems --quiet --option warn-dirty false
 
 # Fail if a fixture is gitignored, since nix reads the git tree and would never see it.
 tracked:
@@ -36,15 +47,27 @@ tracked:
         exit 1
     fi
 
-# Everything CI gates on, in one shell so every failure is reported.
+# Run local checks, then flake checks.
+[no-exit-message]
 validate:
     #!/usr/bin/env bash
+    set -uo pipefail
+
+    if [[ -z ${IN_NIX_SHELL:-} ]]; then
+        exec nix develop '{{ flake_dir }}' --option warn-dirty false --command just --justfile '{{ justfile() }}' validate
+    fi
+
     failed=0
     just tracked || failed=1
     just format --ci || failed=1
     just lint || failed=1
+    just lockcheck || failed=1
+    just typecheck || failed=1
+    if ((failed)); then
+        exit "$failed"
+    fi
+
     just check || failed=1
-    # The tree is for reading by hand; here only the verdict matters, and that is on stderr.
     just outputs >/dev/null || failed=1
     exit $failed
 

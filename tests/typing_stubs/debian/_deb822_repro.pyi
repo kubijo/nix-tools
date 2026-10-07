@@ -1,0 +1,3 @@
+from collections.abc import Iterable
+
+def parse_deb822_file(sequence: Iterable[str]) -> object: ...

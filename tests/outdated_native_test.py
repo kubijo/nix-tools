@@ -16,9 +16,12 @@ import tempfile
 import threading
 import unittest
 import zipfile
+from collections.abc import Sequence
+from typing import ClassVar, TypedDict, cast, override
 from unittest.mock import Mock, patch
 
-settings = json.loads(pathlib.Path(sys.argv.pop(1)).read_text())
+settings_document = cast(dict[str, object], json.loads(pathlib.Path(sys.argv.pop(1)).read_text()))
+settings = {key: value for key, value in settings_document.items() if isinstance(value, str)}
 fixtures = pathlib.Path(sys.argv.pop(1))
 sys.path.insert(0, sys.argv.pop(1))
 import common
@@ -29,14 +32,26 @@ import yaml
 from providers import PROVIDERS
 
 
-class Registry(http.server.BaseHTTPRequestHandler):
-    denied_status = 401
-    release_status = 200
-    tag_status = 200
-    release_tag = 'v2.0'
-    release_tags = ('v1.0', 'v2.0', 'v3.0rc1', 'unrelated/v99.0')
+class Manifest(TypedDict):
+    dependencies: dict[str, str]
 
-    def do_HEAD(self):
+
+class PnpmLock(TypedDict):
+    importers: dict[str, dict[str, dict[str, dict[str, str]]]]
+    packages: dict[str, object]
+    snapshots: dict[str, object]
+
+
+class Registry(http.server.BaseHTTPRequestHandler):
+    denied_status: ClassVar[int] = 401
+    release_status: ClassVar[int] = 200
+    tag_status: ClassVar[int] = 200
+    release_tag: ClassVar[str] = 'v2.0'
+    release_tags: ClassVar[tuple[str, ...]] = ('v1.0', 'v2.0', 'v3.0rc1', 'unrelated/v99.0')
+    npm_name: ClassVar[str] = 'is-number'
+    npm_versions: ClassVar[tuple[str, ...]] = ('5.0.0', '6.0.0', '7.0.0')
+
+    def do_HEAD(self) -> None:
         if not self.path.endswith('.whl'):
             self.send_error(404)
             return
@@ -45,7 +60,8 @@ class Registry(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(len(python_wheel(name, version))))
         self.end_headers()
 
-    def do_GET(self):
+    def do_GET(self) -> None:
+        value: object
         if self.path.endswith('/git/refs/tags') and self.tag_status != 200:
             self.send_error(self.tag_status)
             return
@@ -69,7 +85,7 @@ class Registry(http.server.BaseHTTPRequestHandler):
             version = self.path.removeprefix('/is-number-').removesuffix('.tgz')
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(npm_archive(version))
+            _ = self.wfile.write(npm_archive(version))
             return
         if self.path.endswith('.whl'):
             name, version = self.path.strip('/').removesuffix('-py3-none-any.whl').rsplit('-', 1)
@@ -77,23 +93,23 @@ class Registry(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Length', str(len(wheel)))
             self.end_headers()
-            self.wfile.write(wheel)
+            _ = self.wfile.write(wheel)
             return
         if self.path.startswith('/crates/'):
             version = self.path.split('/')[3]
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(crate(version))
+            _ = self.wfile.write(crate(version))
             return
         if self.path.startswith('/index/'):
             self.send_response(200)
             self.end_headers()
             if self.path.endswith('config.json'):
                 value = {'dl': base + '/crates/{crate}/{version}/download'}
-                self.wfile.write(json.dumps(value).encode())
+                _ = self.wfile.write(json.dumps(value).encode())
             else:
                 for version in ('1.0.20', '1.0.21'):
-                    self.wfile.write(
+                    _ = self.wfile.write(
                         (
                             json.dumps(
                                 {
@@ -162,31 +178,32 @@ class Registry(http.server.BaseHTTPRequestHandler):
             content = 'application/vnd.pypi.simple.v1+json'
         else:
             value = {
-                'name': getattr(self, 'npm_name', 'is-number'),
-                'dist-tags': {'latest': getattr(self, 'npm_versions', ('7.0.0',))[-1]},
+                'name': self.npm_name,
+                'dist-tags': {'latest': self.npm_versions[-1]},
                 'versions': {
                     v: {
-                        'name': getattr(self, 'npm_name', 'is-number'),
+                        'name': self.npm_name,
                         'version': v,
                         'dist': {
                             'tarball': f'{base}/is-number-{v}.tgz',
                             'shasum': hashlib.sha1(npm_archive(v)).hexdigest(),
                         },
                     }
-                    for v in getattr(self, 'npm_versions', ('5.0.0', '6.0.0', '7.0.0'))
+                    for v in self.npm_versions
                 },
             }
             content = 'application/json'
         self.send_response(200)
         self.send_header('Content-Type', content)
         self.end_headers()
-        self.wfile.write(json.dumps(value, separators=(',', ':')).encode())
+        _ = self.wfile.write(json.dumps(value, separators=(',', ':')).encode())
 
-    def log_message(self, format, *args):
+    @override
+    def log_message(self, format: str, *args: object) -> None:
         pass
 
 
-def crate(version):
+def crate(version: str) -> bytes:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode='w') as archive:
         files = {'Cargo.toml': f'[package]\nname="semver"\nversion="{version}"\nedition="2021"\n', 'src/lib.rs': ''}
@@ -197,7 +214,7 @@ def crate(version):
     return gzip.compress(buffer.getvalue(), mtime=0)
 
 
-def npm_archive(version):
+def npm_archive(version: str) -> bytes:
     buffer = io.BytesIO()
     data = json.dumps({'name': 'is-number', 'version': version}).encode()
     with tarfile.open(fileobj=buffer, mode='w') as archive:
@@ -207,7 +224,7 @@ def npm_archive(version):
     return gzip.compress(buffer.getvalue(), mtime=0)
 
 
-def python_wheel(name, version):
+def python_wheel(name: str, version: str) -> bytes:
     buffer = io.BytesIO()
     prefix = f'{name.replace("-", "_")}-{version}.dist-info/'
     with zipfile.ZipFile(buffer, 'w') as archive:
@@ -220,7 +237,7 @@ def python_wheel(name, version):
     return buffer.getvalue()
 
 
-def digest(root):
+def digest(root: pathlib.Path) -> dict[str, tuple[str, int]]:
     return {
         str(p.relative_to(root)): (hashlib.sha256(p.read_bytes()).hexdigest(), p.stat().st_mode)
         for p in root.rglob('*')
@@ -229,40 +246,50 @@ def digest(root):
 
 
 class NativeClients(unittest.TestCase):
+    server: ClassVar[http.server.ThreadingHTTPServer]
+    thread: ClassVar[threading.Thread]
+    registry: ClassVar[str]
+    temp: tempfile.TemporaryDirectory[str]
+    root: pathlib.Path
+
+    def __init__(self, methodName: str = 'runTest') -> None:
+        super().__init__(methodName)
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = pathlib.Path(self.temp.name)
+
     @classmethod
-    def setUpClass(cls):
+    @override
+    def setUpClass(cls) -> None:
         cls.server = http.server.ThreadingHTTPServer(('localhost', 0), Registry)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
         cls.registry = f'http://localhost:{cls.server.server_port}'
 
     @classmethod
-    def tearDownClass(cls):
+    @override
+    def tearDownClass(cls) -> None:
         cls.server.shutdown()
         cls.server.server_close()
         cls.thread.join()
 
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.root = pathlib.Path(self.temp.name)
-        environment = patch.dict(os.environ, {'OUTDATED_TEST_REGISTRY': self.registry})
-        environment.start()
-        self.addCleanup(environment.stop)
+    @override
+    def setUp(self) -> None:
+        _ = cast(object, self.enterContext(patch.dict(os.environ, {'OUTDATED_TEST_REGISTRY': self.registry})))
 
-    def release_client(self):
+    def release_client(self) -> network.Client:
         return network.Client(timeout=10, nvchecker=settings['nvchecker'])
 
-    def js(self, name, value):
-        (self.root / name).write_text(json.dumps(value))
+    def js(self, name: str, value: object) -> None:
+        _ = (self.root / name).write_text(json.dumps(value))
 
-    def generate(self, command):
+    def generate(self, command: Sequence[str]) -> None:
         result = subprocess.run(
             command, cwd=self.root, env=common.environment(), capture_output=True, text=True, timeout=30, check=False
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def invoke(self, name):
+    def invoke(self, name: str) -> list[common.Result]:
         before = digest(self.root)
         try:
             rows = list(
@@ -281,7 +308,7 @@ class NativeClients(unittest.TestCase):
             self.assertEqual(before, digest(self.root))
         return rows
 
-    def project(self, manager=None):
+    def project(self, manager: str | None = None) -> None:
         self.js(
             'package.json',
             {
@@ -292,17 +319,17 @@ class NativeClients(unittest.TestCase):
             }
             | ({'packageManager': manager} if manager else {}),
         )
-        (self.root / '.npmrc').write_text(f'registry={self.registry}\n')
+        _ = (self.root / '.npmrc').write_text(f'registry={self.registry}\n')
 
-    def test_explicit_registry_entries_use_native_sources(self):
-        catalog = {row['name']: row for row in settings['releaseExamples']}
-        self.assertEqual(catalog['biome']['provider'], 'npm')
-        self.assertEqual(catalog['biome']['project'], '@biomejs/biome')
-        self.assertEqual(catalog['lychee']['provider'], 'crates')
-        self.assertEqual(catalog['lychee']['project'], 'lychee')
+    def test_explicit_registry_entries_use_native_sources(self) -> None:
+        catalog = {row['name']: row for row in cast(list[sources.ReleaseEntry], settings_document['releaseExamples'])}
+        self.assertEqual(catalog['biome'].get('provider'), 'npm')
+        self.assertEqual(catalog['biome'].get('project'), '@biomejs/biome')
+        self.assertEqual(catalog['lychee'].get('provider'), 'crates')
+        self.assertEqual(catalog['lychee'].get('project'), 'lychee')
         self.assertTrue(all('tagPattern' not in row for row in catalog.values()))
         # Captured adoption releases include unrelated monorepo namespaces.
-        captured = json.loads((fixtures / 'releases.json').read_text())
+        captured = cast(dict[str, list[dict[str, str]]], json.loads((fixtures / 'releases.json').read_text()))
         self.assertIn('@biomejs/biome@2.5.15', [r['tag_name'] for r in captured['biomejs-biome']])
         self.assertIn('lychee-lib-v0.24.2', [r['tag_name'] for r in captured['lycheeverse-lychee']])
         client = self.release_client()
@@ -312,18 +339,18 @@ class NativeClients(unittest.TestCase):
             patch.object(Registry, 'npm_name', '@biomejs/biome', create=True),
             patch.object(Registry, 'npm_versions', ('2.5.14', '2.5.15'), create=True),
         ):
-            row = sources.release_entry(client, catalog['biome'] | {'version': '2.5.14'}, root=self.root)
+            row = sources.release_entry(client, {**catalog['biome'], 'version': '2.5.14'}, root=self.root)
         self.assertEqual((row.current, row.latest, row.state), ('2.5.14', '2.5.15', 'outdated'))
-        row = sources.release_entry(client, catalog['lychee'] | {'version': '0.24.2'}, root=self.root)
+        row = sources.release_entry(client, {**catalog['lychee'], 'version': '0.24.2'}, root=self.root)
         self.assertEqual((row.current, row.latest, row.state), ('0.24.2', '0.24.2', 'up-to-date'))
-        row = sources.release_entry(client, catalog['lychee'] | {'version': '0.24.2+build.1'}, root=self.root)
+        row = sources.release_entry(client, {**catalog['lychee'], 'version': '0.24.2+build.1'}, root=self.root)
         self.assertEqual(row.state, 'up-to-date')
-        row = sources.release_entry(client, catalog['lychee'] | {'version': 'unreadable'}, root=self.root)
+        row = sources.release_entry(client, {**catalog['lychee'], 'version': 'unreadable'}, root=self.root)
         self.assertEqual((row.state, row.current), ('skipped', 'unreadable'))
         with patch.object(Registry, 'release_status', 503), self.assertRaises(common.Failure):
-            sources.release_entry(client, catalog['lychee'], root=self.root)
+            _ = sources.release_entry(client, catalog['lychee'], root=self.root)
 
-    def test_nvchecker_native_selection_and_unreadable_sources(self):
+    def test_nvchecker_native_selection_and_unreadable_sources(self) -> None:
         client = self.release_client()
         self.assertEqual(client.release('owner/project'), ('v2.0', 'v2.0'))
         self.assertEqual(client.release('owner/project', tags=True), ('v2.0', 'v2.0'))
@@ -334,18 +361,18 @@ class NativeClients(unittest.TestCase):
                 patch.object(Registry, 'release_tag', tag),
                 self.assertRaises(common.UnreadableSource),
             ):
-                client.release('owner/project')
+                _ = client.release('owner/project')
         with patch.object(Registry, 'release_tags', ('other/v99.0',)), self.assertRaises(common.UnreadableSource):
-            client.release('owner/project', tags=True)
+            _ = client.release('owner/project', tags=True)
         for status in (401, 403, 404, 503):
             with self.subTest(status=status), patch.object(Registry, 'release_status', status):
                 rows = main.guarded('releases', 'fixture', '.', lambda: client.release('owner/project'))
                 self.assertEqual([row.state for row in rows], ['error'])
 
-    def test_nix_version_tag_without_github_release(self):
+    def test_nix_version_tag_without_github_release(self) -> None:
         client = self.release_client()
         client.commit = Mock(return_value='a' * 40)
-        node = {
+        node: sources.NixNode = {
             'locked': {'type': 'github', 'owner': 'owner', 'repo': 'project', 'rev': 'a' * 40},
             'original': {'ref': 'v0.7.0'},
         }
@@ -354,7 +381,7 @@ class NativeClients(unittest.TestCase):
             patch.object(Registry, 'release_tags', ('v0.6.0', 'v0.7.0', 'v0.8.0rc1')),
         ):
             with self.assertRaises(common.Failure):
-                client.release('owner/project')
+                _ = client.release('owner/project')
             row = sources.nix_input(node, 'nix-tools', {}, self.root, client)
         self.assertEqual((row.state, row.current, row.latest), ('up-to-date', 'a' * 40, 'a' * 40))
         self.assertIn('v0.7.0 -> v0.7.0', row.detail)
@@ -366,7 +393,7 @@ class NativeClients(unittest.TestCase):
             )
         self.assertEqual([row.state for row in rows], ['error'])
 
-    def test_nvchecker_git_url_is_one_quoted_argument(self):
+    def test_nvchecker_git_url_is_one_quoted_argument(self) -> None:
         repository = self.root / 'repo; touch INJECTED'
         repository.mkdir()
         self.generate(['git', 'init', str(repository)])
@@ -390,20 +417,20 @@ class NativeClients(unittest.TestCase):
         self.assertEqual(self.release_client().registry_release({'provider': 'git', 'url': str(repository)}), 'v2.0')
         self.assertFalse((self.root / 'INJECTED').exists())
 
-    def test_uv_current_outdated_and_failed_auth_are_distinct(self):
+    def test_uv_current_outdated_and_failed_auth_are_distinct(self) -> None:
         # The adopter's workspace, optional/group and platform reproduction.
-        (self.root / 'pyproject.toml').write_text(
+        _ = (self.root / 'pyproject.toml').write_text(
             '[project]\nname="fixture"\nversion="0.0.0"\nrequires-python=">=3.11"\n'
-            'dependencies=["member", "packaging==24.0; sys_platform != \'win32\'", '
-            '"packaging==25.0; sys_platform == \'win32\'"]\n'
-            '[project.optional-dependencies]\nextra=["optional-pkg==24.0"]\n'
-            '[dependency-groups]\ndev=["dev-pkg==24.0"]\n'
-            '[tool.uv.workspace]\nmembers=["member"]\n'
-            '[tool.uv.sources]\nmember={workspace=true}\n'
-            f'[[tool.uv.index]]\nname="private"\nurl="{self.registry}/private/simple"\ndefault=true\n'
+            + 'dependencies=["member", "packaging==24.0; sys_platform != \'win32\'", '
+            + '"packaging==25.0; sys_platform == \'win32\'"]\n'
+            + '[project.optional-dependencies]\nextra=["optional-pkg==24.0"]\n'
+            + '[dependency-groups]\ndev=["dev-pkg==24.0"]\n'
+            + '[tool.uv.workspace]\nmembers=["member"]\n'
+            + '[tool.uv.sources]\nmember={workspace=true}\n'
+            + f'[[tool.uv.index]]\nname="private"\nurl="{self.registry}/private/simple"\ndefault=true\n'
         )
         (self.root / 'member').mkdir()
-        (self.root / 'member/pyproject.toml').write_text(
+        _ = (self.root / 'member/pyproject.toml').write_text(
             '[project]\nname="member"\nversion="0.0.0"\nrequires-python=">=3.11"\ndependencies=["member-pkg==24.0"]\n'
         )
         auth = {
@@ -445,7 +472,7 @@ class NativeClients(unittest.TestCase):
         self.assertEqual(common.summary(authenticated_rows)[1], 2)
         self.assertEqual(next(r.state for r in authenticated_rows if r.current == '25.0'), 'unknown')
 
-    def test_npm_locked_and_registry_config(self):
+    def test_npm_locked_and_registry_config(self) -> None:
         self.project()
         self.js(
             'package-lock.json',
@@ -461,18 +488,18 @@ class NativeClients(unittest.TestCase):
         self.assertEqual([(r.current, r.latest, r.state) for r in rows], [('6.0.0', '7.0.0', 'outdated')])
         self.assertFalse((self.root / 'node_modules').exists())
 
-    def test_pnpm_locked_workspace(self):
+    def test_pnpm_locked_workspace(self) -> None:
         self.project()
-        shutil.copyfile(fixtures / 'pnpm-lock.yaml', self.root / 'pnpm-lock.yaml')
+        _ = shutil.copyfile(fixtures / 'pnpm-lock.yaml', self.root / 'pnpm-lock.yaml')
         rows = self.invoke('pnpm')
         self.assertEqual(rows[0].state, 'outdated')
         self.assertEqual(rows[0].current, '6.0.0')
         self.assertFalse((self.root / 'node_modules').exists())
 
-    def test_pnpm_native_inventory_preserves_aliases_and_non_registry_sources(self):
+    def test_pnpm_native_inventory_preserves_aliases_and_non_registry_sources(self) -> None:
         self.project()
         (self.root / 'local').mkdir()
-        (self.root / 'local/package.json').write_text('{"name":"local","version":"1.0.0"}')
+        _ = (self.root / 'local/package.json').write_text('{"name":"local","version":"1.0.0"}')
         self.js(
             'package.json',
             {
@@ -496,14 +523,14 @@ class NativeClients(unittest.TestCase):
         self.assertEqual(rows['linked'].state, 'skipped')
         self.assertFalse((self.root / 'node_modules').exists())
 
-    def test_pnpm_distinct_versions_in_multiple_workspaces(self):
+    def test_pnpm_distinct_versions_in_multiple_workspaces(self) -> None:
         self.project()
-        (self.root / 'pnpm-workspace.yaml').write_text('packages: ["packages/*"]\n')
-        lock = yaml.safe_load((fixtures / 'pnpm-lock.yaml').read_text())
+        _ = (self.root / 'pnpm-workspace.yaml').write_text('packages: ["packages/*"]\n')
+        lock = cast(PnpmLock, yaml.safe_load((fixtures / 'pnpm-lock.yaml').read_text()))
         for name, version in [('older', '5.0.0'), ('current', '7.0.0')]:
             folder = self.root / 'packages' / name
             folder.mkdir(parents=True)
-            (folder / 'package.json').write_text(
+            _ = (folder / 'package.json').write_text(
                 json.dumps({'name': name, 'version': '0.0.0', 'dependencies': {'is-number': version}})
             )
             lock['importers']['packages/' + name] = {
@@ -511,22 +538,22 @@ class NativeClients(unittest.TestCase):
             }
             lock['packages']['is-number@' + version] = lock['packages']['is-number@6.0.0']
             lock['snapshots']['is-number@' + version] = {}
-        (self.root / 'pnpm-lock.yaml').write_text(yaml.safe_dump(lock))
+        _ = (self.root / 'pnpm-lock.yaml').write_text(yaml.safe_dump(lock))
         rows = self.invoke('pnpm')
         self.assertEqual({r.current for r in rows if r.state == 'outdated'}, {'5.0.0', '6.0.0'})
         self.assertFalse(any(r.state == 'unknown' for r in rows))
-        manifest = json.loads((self.root / 'package.json').read_text())
+        manifest = cast(Manifest, json.loads((self.root / 'package.json').read_text()))
         manifest['dependencies']['is-number'] = '7.0.0'
         self.js('package.json', manifest)
         lock['importers']['.']['dependencies']['is-number'] = {'specifier': '7.0.0', 'version': '7.0.0'}
-        (self.root / 'pnpm-lock.yaml').write_text(yaml.safe_dump(lock))
+        _ = (self.root / 'pnpm-lock.yaml').write_text(yaml.safe_dump(lock))
         rows = self.invoke('pnpm')
         self.assertEqual({r.current for r in rows if r.state == 'outdated'}, {'5.0.0'})
         self.assertFalse(any(r.state == 'unknown' for r in rows))
 
-    def test_npm_aliases_nested_versions_and_source_identity(self):
+    def test_npm_aliases_nested_versions_and_source_identity(self) -> None:
         self.project()
-        manifest = json.loads((self.root / 'package.json').read_text())
+        manifest = cast(Manifest, json.loads((self.root / 'package.json').read_text()))
         manifest['dependencies'] = {'alias': 'npm:is-number@6.0.0', 'parent': 'git+https://example.invalid/repo'}
         self.js('package.json', manifest)
         self.js(
@@ -557,15 +584,15 @@ class NativeClients(unittest.TestCase):
         )
         rows = self.invoke('npm')
         self.assertEqual({r.current for r in rows if r.state == 'outdated'}, {'5.0.0', '6.0.0'})
-        lock = json.loads((self.root / 'package-lock.json').read_text())
+        lock = cast(dict[str, dict[str, dict[str, object]]], json.loads((self.root / 'package-lock.json').read_text()))
         lock['packages']['node_modules/alias']['resolved'] = self.registry + '/different-source.tgz'
         self.js('package-lock.json', lock)
         rows = self.invoke('npm')
         self.assertEqual(next(r for r in rows if r.source.endswith('/alias')).state, 'unknown')
 
-    def test_upstream_semver_build_metadata_and_prereleases(self):
+    def test_upstream_semver_build_metadata_and_prereleases(self) -> None:
         report = self.root / 'versions.json'
-        report.write_text(
+        _ = report.write_text(
             json.dumps(
                 [
                     {'name': 'build', 'current': '1.0.0+build.2', 'latest': '1.0.0+build.1'},
@@ -574,26 +601,29 @@ class NativeClients(unittest.TestCase):
                 ]
             )
         )
-        document = common.command_json([settings['semver'], 'versions', str(report)], self.root, 10)
+        document = cast(
+            dict[str, list[dict[str, str]]],
+            common.command_json([settings['semver'], 'versions', str(report)], self.root, 10),
+        )
         self.assertEqual([r['state'] for r in document['results']], ['up-to-date', 'outdated', 'ahead'])
 
-    def test_npm_invalid_lock_and_empty_project(self):
+    def test_npm_invalid_lock_and_empty_project(self) -> None:
         self.project()
-        (self.root / 'package-lock.json').write_text('broken JSON')
+        _ = (self.root / 'package-lock.json').write_text('broken JSON')
         with self.assertRaises(common.Failure):
-            self.invoke('npm')
+            _ = self.invoke('npm')
         self.js('package.json', {'name': 'empty', 'version': '1.0.0'})
         self.js('package-lock.json', {'lockfileVersion': 3, 'packages': {'': {'name': 'empty', 'version': '1.0.0'}}})
         self.assertEqual(self.invoke('npm')[0].state, 'up-to-date')
 
-    def test_yarn_generation_lock_formats(self):
+    def test_yarn_generation_lock_formats(self) -> None:
         for generation, lock_version in ((2, 4), (3, 6), (4, 10)):
             with self.subTest(generation=generation):
                 self.project(f'yarn@{generation}.0.0')
-                (self.root / '.yarnrc.yml').write_text(
+                _ = (self.root / '.yarnrc.yml').write_text(
                     f'npmRegistryServer: "{self.registry}"\nunsafeHttpWhitelist: [localhost]\n'
                 )
-                (self.root / 'yarn.lock').write_text(
+                _ = (self.root / 'yarn.lock').write_text(
                     (fixtures / 'yarn.lock').read_text().replace('version: 10\n', f'version: {lock_version}\n')
                 )
                 rows = self.invoke('yarn')
@@ -601,31 +631,31 @@ class NativeClients(unittest.TestCase):
                 self.assertEqual(rows[0].latest, '7.0.0')
                 self.assertFalse((self.root / '.pnp.cjs').exists())
 
-    def test_yarn_aliases_ranges_virtuals_and_unsupported_protocols(self):
+    def test_yarn_aliases_ranges_virtuals_and_unsupported_protocols(self) -> None:
         self.project('yarn@4.0.0')
-        (self.root / '.yarnrc.yml').write_text(
+        _ = (self.root / '.yarnrc.yml').write_text(
             f'npmRegistryServer: "{self.registry}"\nunsafeHttpWhitelist: [localhost]\n'
         )
-        lock = yaml.safe_load((fixtures / 'yarn.lock').read_text())
+        lock = cast(dict[str, dict[str, object]], yaml.safe_load((fixtures / 'yarn.lock').read_text()))
         item = lock.pop('is-number@npm:6.0.0')
         lock['alias@npm:is-number@^6.0.0, is-number@npm:~6.0.0'] = item
         lock['is-number@virtual:abc#npm:6.0.0'] = dict(item, resolution='is-number@virtual:abc#npm:6.0.0')
         lock['patched@patch:abc'] = dict(item, resolution='patched@patch:abc')
-        (self.root / 'yarn.lock').write_text(yaml.safe_dump(lock))
+        _ = (self.root / 'yarn.lock').write_text(yaml.safe_dump(lock))
         rows = self.invoke('yarn')
         self.assertEqual(len([r for r in rows if r.state == 'outdated']), 2)
         self.assertEqual(next(r for r in rows if r.name == 'is-number@npm:6.0.0').compatible, '6.0.0')
         self.assertEqual(next(r for r in rows if r.name == 'patched@patch:abc').state, 'unknown')
 
-    def test_yarn_classic_and_malformed_locks_fail(self):
+    def test_yarn_classic_and_malformed_locks_fail(self) -> None:
         self.project('yarn@4.0.0')
         for lock in ('# yarn lockfile v1\n', '__metadata: {version: 8}\nbroken: true\n', '__metadata: {version: 8}\n'):
-            (self.root / 'yarn.lock').write_text(lock)
+            _ = (self.root / 'yarn.lock').write_text(lock)
             with self.subTest(lock=lock), self.assertRaises(common.Failure):
-                self.invoke('yarn')
+                _ = self.invoke('yarn')
 
-    def test_nix_inventory_uses_native_metadata_and_custom_lock(self):
-        (self.root / 'flake.nix').write_text(
+    def test_nix_inventory_uses_native_metadata_and_custom_lock(self) -> None:
+        _ = (self.root / 'flake.nix').write_text(
             '{ inputs.source.url = "github:example/example/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; outputs = inputs: {}; }'
         )
         self.js(
@@ -656,12 +686,12 @@ class NativeClients(unittest.TestCase):
         self.assertEqual([callback().state for _, callback in jobs], ['pinned'])
         self.assertEqual(before, digest(self.root))
 
-    def test_uv_locked_universal_custom_index(self):
-        (self.root / 'pyproject.toml').write_text(
+    def test_uv_locked_universal_custom_index(self) -> None:
+        _ = (self.root / 'pyproject.toml').write_text(
             '[project]\nname="nix-tools-public-provider-fixture"\nversion="0.0.0"\nrequires-python=">=3.11"\ndependencies=["packaging==24.0"]\n'
             + f'[[tool.uv.index]]\nurl="{self.registry}/simple"\ndefault=true\n'
         )
-        (self.root / 'uv.lock').write_text(
+        _ = (self.root / 'uv.lock').write_text(
             (fixtures / 'uv.lock').read_text().replace('https://pypi.org/simple', self.registry + '/simple')
         )
         rows = self.invoke('uv')
@@ -669,13 +699,13 @@ class NativeClients(unittest.TestCase):
         self.assertEqual(rows[-1].latest, '25.0')
         self.assertFalse((self.root / '.venv').exists())
 
-    def test_uv_native_inventory_includes_optional_groups_and_platforms(self):
-        (self.root / 'pyproject.toml').write_text(
+    def test_uv_native_inventory_includes_optional_groups_and_platforms(self) -> None:
+        _ = (self.root / 'pyproject.toml').write_text(
             '[project]\nname="fixture"\nversion="0.0.0"\nrequires-python=">=3.11"\n'
-            'dependencies=["packaging==24.0; sys_platform != \'win32\'", "packaging==25.0; sys_platform == \'win32\'"]\n'
-            '[project.optional-dependencies]\nextra=["optional-pkg==24.0"]\n'
-            '[dependency-groups]\ncheck=["group-pkg==24.0"]\n'
-            f'[[tool.uv.index]]\nurl="{self.registry}/simple"\ndefault=true\n'
+            + 'dependencies=["packaging==24.0; sys_platform != \'win32\'", "packaging==25.0; sys_platform == \'win32\'"]\n'
+            + '[project.optional-dependencies]\nextra=["optional-pkg==24.0"]\n'
+            + '[dependency-groups]\ncheck=["group-pkg==24.0"]\n'
+            + f'[[tool.uv.index]]\nurl="{self.registry}/simple"\ndefault=true\n'
         )
         self.generate([settings['uv'], 'lock', '--no-cache', '--no-python-downloads'])
         rows = self.invoke('uv')
@@ -683,7 +713,7 @@ class NativeClients(unittest.TestCase):
         self.assertEqual({row.name for row in rows}, {'fixture', 'packaging', 'optional-pkg', 'group-pkg'})
         self.assertEqual(next(row for row in rows if row.name == 'optional-pkg').state, 'outdated')
 
-    def test_composer_locked_with_private_repository_semantics(self):
+    def test_composer_locked_with_private_repository_semantics(self) -> None:
         self.js(
             'composer.json',
             {
@@ -711,19 +741,19 @@ class NativeClients(unittest.TestCase):
         self.assertEqual([(r.current, r.latest, r.state) for r in rows], [('1.1.4', '3.0.2', 'outdated')])
         self.assertFalse((self.root / 'vendor').exists())
 
-    def test_cargo_locked_with_source_replacement(self):
+    def test_cargo_locked_with_source_replacement(self) -> None:
         (self.root / 'src').mkdir()
-        (self.root / 'src/lib.rs').write_text('')
-        (self.root / 'Cargo.toml').write_text(
+        _ = (self.root / 'src/lib.rs').write_text('')
+        _ = (self.root / 'Cargo.toml').write_text(
             '[package]\nname="fixture"\nversion="0.0.0"\nedition="2021"\n[dependencies]\nsemver="=1.0.20"\n'
         )
         checksum = hashlib.sha256(crate('1.0.20')).hexdigest()
-        (self.root / 'Cargo.lock').write_text(
+        _ = (self.root / 'Cargo.lock').write_text(
             'version=4\n[[package]]\nname="fixture"\nversion="0.0.0"\ndependencies=["semver"]\n[[package]]\nname="semver"\nversion="1.0.20"\nsource="registry+https://github.com/rust-lang/crates.io-index"\n'
             + f'checksum="{checksum}"\n'
         )
         (self.root / '.cargo').mkdir()
-        (self.root / '.cargo/config.toml').write_text(
+        _ = (self.root / '.cargo/config.toml').write_text(
             '[source.crates-io]\nreplace-with="fixture"\n[source.fixture]\n'
             + f'registry="sparse+{self.registry}/index/"\n'
         )
@@ -734,4 +764,4 @@ class NativeClients(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main()
+    _ = unittest.main()

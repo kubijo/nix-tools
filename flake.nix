@@ -99,7 +99,13 @@
           };
           lint = {
             python.configFile = ./pyproject.toml;
+            deptry.projects.nix-tools.sourceRoots = [ "lib/outdated" ];
             javascript = true;
+          };
+          coverage.projectChecks."lint:deptry-nix-tools" = {
+            includes = [ "lib/outdated/**/*.py" ];
+            kind = "semantic";
+            description = "Python imports and declared dependencies for outdated reporting";
           };
           outdated = {
             enable = true;
@@ -141,6 +147,7 @@
           packages = project.${system}.packages ++ [
             (toolPkgsFor system).just
             (toolPkgsFor system).uv
+            (toolPkgsFor system).basedpyright
             (pythonEnvsFor (toolPkgsFor system)).dev
           ];
           env = {

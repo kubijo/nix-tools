@@ -10,10 +10,16 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.error
+import urllib.request
 from collections import Counter
+from collections.abc import Sequence
 from email.message import Message
-from typing import cast
+from http.client import HTTPMessage
+from typing import Self, cast, override
 from unittest.mock import MagicMock, Mock, patch
+
+from rich.style import Style
 
 sys.path.insert(0, sys.argv.pop(1))
 import common
@@ -22,41 +28,47 @@ import network
 import releases
 import sources
 from providers import PROVIDERS, cargo, composer, npm, pnpm, uv, yarn
+from terminal_env import AGENT_ENVS
 
 
 class Terminal(io.StringIO):
-    def isatty(self):
+    @override
+    def isatty(self) -> bool:
         return True
 
 
 class Fixture(unittest.TestCase):
-    def setUp(self):
+    temporary: tempfile.TemporaryDirectory[str]
+    root: pathlib.Path
+
+    def __init__(self, methodName: str = 'runTest') -> None:
+        super().__init__(methodName)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = pathlib.Path(self.temporary.name)
 
-    def write(self, name, text):
+    def write(self, name: str, text: str) -> pathlib.Path:
         path = self.root / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
+        _ = path.write_text(text)
         return path
 
-    def js(self, name, data):
+    def js(self, name: str, data: object) -> pathlib.Path:
         return self.write(name, json.dumps(data))
 
-    def tool(self, body):
+    def tool(self, body: str) -> str:
         path = self.write('tool', f'#!{sys.executable}\n' + body)
         path.chmod(0o755)
         return str(path)
 
 
 class Protocol(Fixture):
-    def test_registered_providers_dispatch_with_public_names(self):
+    def test_registered_providers_dispatch_with_public_names(self) -> None:
         names = {'cargo', 'composer', 'npm', 'pnpm', 'uv', 'yarn'}
         self.assertEqual(set(PROVIDERS), names)
         settings = {name: {'exe': name} for name in names}
         reports = {name: Mock(return_value=[common.Result(name, 'fixture', '.', 'up-to-date')]) for name in names}
-        config = {'providers': settings, 'tools': [], 'releases': [], 'adapters': []}
+        config: main.Inventory = {'providers': settings, 'tools': [], 'releases': [], 'adapters': []}
         client = network.Client(timeout=7)
         with patch.dict(PROVIDERS, reports):
             jobs = main.jobs(config, self.root, client)
@@ -66,12 +78,12 @@ class Protocol(Fixture):
                 self.assertEqual([(row.provider, row.state) for row in rows], [(job[0], 'up-to-date')])
                 reports[job[0]].assert_called_once_with(settings[job[0]], self.root, 7)
 
-    def test_runtime_version_discovery_reuses_release_lookup_and_preserves_source(self):
+    def test_runtime_version_discovery_reuses_release_lookup_and_preserves_source(self) -> None:
         original = self.write('source', 'unchanged')
         command = self.tool('import pathlib\npathlib.Path("source").write_text("mutated")\nprint("tool 1.2.3")\n')
         client = network.Client()
         client.release = Mock(return_value=('v2.0.0', '2.0.0'))
-        item = {
+        item: sources.ReleaseEntry = {
             'name': 'host',
             'repo': 'example/tool',
             'versionCommand': [command],
@@ -83,13 +95,13 @@ class Protocol(Fixture):
         self.assertEqual(original.read_text(), 'unchanged')
         for output in ('', 'tool 1.2.3\nnoise', 'private-token'):
             with patch.object(sources, 'run', return_value=(output, '')), self.assertRaises(common.Failure):
-                sources.release_entry(client, item, root=self.root)
+                _ = sources.release_entry(client, item, root=self.root)
         for error in (common.Failure('Provider command timed out'), common.Failure('Provider command failed')):
             with patch.object(sources, 'run', side_effect=error), self.assertRaises(common.Failure):
-                sources.release_entry(client, item, root=self.root)
+                _ = sources.release_entry(client, item, root=self.root)
 
-    def test_static_skips_do_not_copy_source_or_execute_commands(self):
-        config = {
+    def test_static_skips_do_not_copy_source_or_execute_commands(self) -> None:
+        config: main.Inventory = {
             'providers': {},
             'tools': [],
             'releases': [],
@@ -103,7 +115,7 @@ class Protocol(Fixture):
         )
         self.assertEqual(common.summary(rows)[1], 0)
 
-    def test_exit_precedence_and_empty_reports(self):
+    def test_exit_precedence_and_empty_reports(self) -> None:
         for states, expected in [
             ([], 2),
             (['up-to-date'], 0),
@@ -118,7 +130,7 @@ class Protocol(Fixture):
                     common.summary([common.Result('test', 'name', '.', state) for state in states])[1], expected
                 )
 
-    def test_versions(self):
+    def test_versions(self) -> None:
         for before, after, expected in [
             ('3.9', '3.14', 'outdated'),
             ('v1.2.0', '1.2', 'up-to-date'),
@@ -129,10 +141,10 @@ class Protocol(Fixture):
         ]:
             self.assertEqual(common.compare('test', 'x', '.', before, after).state, expected)
 
-    def test_adapter_protocol(self):
+    def test_adapter_protocol(self) -> None:
         good = {'schemaVersion': 1, 'results': [{'name': 'thing', 'state': 'outdated', 'current': '1', 'latest': '2'}]}
         self.assertEqual(common.validate_adapter(good, 'custom', '.')[0].latest, '2')
-        for bad in [
+        bad_values: list[object] = [
             None,
             [],
             {},
@@ -141,11 +153,12 @@ class Protocol(Fixture):
             {'schemaVersion': 1, 'results': [{'name': 'x', 'state': 'success'}]},
             {'schemaVersion': 1, 'results': [{'name': 'x', 'state': 'up-to-date', 'secret': 'x'}]},
             {'schemaVersion': 1, 'results': [{'name': 'x', 'state': 'up-to-date', 'current': 1}]},
-        ]:
+        ]
+        for bad in bad_values:
             with self.subTest(bad=bad), self.assertRaises(common.Failure):
-                common.validate_adapter(bad, 'custom', '.')
+                _ = common.validate_adapter(bad, 'custom', '.')
 
-    def test_partial_results_and_sensitive_exceptions(self):
+    def test_partial_results_and_sensitive_exceptions(self) -> None:
         def partial():
             yield common.Result('p', 'first', '.', 'outdated')
             raise ValueError('secret-token')
@@ -156,7 +169,7 @@ class Protocol(Fixture):
         self.assertEqual(main.guarded('p', 'x', '.', list)[0].state, 'error')
         self.assertEqual(main.guarded('p', 'x', '.', lambda: [1])[0].state, 'error')
 
-    def test_redaction_and_json_output(self):
+    def test_redaction_and_json_output(self) -> None:
         with patch.dict(os.environ, {'GH_TOKEN': 'sensitive-token'}):
             value = main.clean('\x1b[31mhttps://user:pass@example.test/?token=abc sensitive-token')
         self.assertNotIn('user:pass', value)
@@ -168,7 +181,7 @@ class Protocol(Fixture):
         self.assertEqual(code, 1)
         self.assertEqual(json.loads(output.getvalue())['schemaVersion'], 1)
 
-    def test_unknown_is_gray_only_on_interactive_text_output(self):
+    def test_unknown_is_gray_only_on_interactive_text_output(self) -> None:
         row = common.Result('uv', 'package', 'uv.lock', 'unknown', '1.0')
         for json_output, no_color, colored in ((False, False, True), (False, True, False), (True, False, False)):
             with self.subTest(json_output=json_output, no_color=no_color), patch.dict(os.environ, {}, clear=True):
@@ -179,10 +192,10 @@ class Protocol(Fixture):
         with patch.dict(os.environ, {'NO_COLOR': '1'}):
             output = Terminal()
             with contextlib.redirect_stdout(output):
-                main.report([row], False)
+                _ = main.report([row], False)
             self.assertNotIn('\x1b', output.getvalue())
 
-    def test_force_color_overrides_no_color_and_nonterminal_heuristics(self):
+    def test_force_color_overrides_no_color_and_nonterminal_heuristics(self) -> None:
         row = common.Result('uv', 'package', 'uv.lock', 'unknown', '1.0')
         for environment, no_color, styled in (
             ({'FORCE_COLOR': '1', 'NO_COLOR': '1', 'TERM': 'dumb', 'CI': '1'}, True, True),
@@ -196,9 +209,9 @@ class Protocol(Fixture):
                     self.assertEqual(main.report([row], False, no_color), 2)
                 self.assertEqual('\x1b[' in output.getvalue(), styled)
 
-    def test_agent_markers_select_terse_output_even_on_a_tty(self):
+    def test_agent_markers_select_terse_output_even_on_a_tty(self) -> None:
         row = common.Result('tools', 'tool', '.', 'outdated', '1', latest='2')
-        for marker in main.AGENT_ENVS:
+        for marker in AGENT_ENVS:
             with self.subTest(marker=marker), patch.dict(os.environ, {marker: '1', 'TERM': 'xterm'}, clear=True):
                 output = Terminal()
                 with contextlib.redirect_stdout(output):
@@ -220,15 +233,15 @@ class Protocol(Fixture):
             self.assertIn('│', output.getvalue())
             self.assertIn('\x1b[', output.getvalue())
 
-    def test_snapshot_preserves_files_and_rejects_links(self):
+    def test_snapshot_preserves_files_and_rejects_links(self) -> None:
         original = self.write('manifest', 'original')
         original.chmod(0o751)
-        self.write('.git/index', 'index')
-        self.write('.venv/large-file', 'environment')
+        _ = self.write('.git/index', 'index')
+        _ = self.write('.venv/large-file', 'environment')
         with common.snapshot(self.root) as work:
             self.assertFalse((work / '.git').exists())
             self.assertFalse((work / '.venv').exists())
-            (work / 'manifest').write_text('changed')
+            _ = (work / 'manifest').write_text('changed')
         self.assertEqual(original.read_text(), 'original')
         self.assertEqual(original.stat().st_mode & 0o777, 0o751)
         (self.root / 'outside').symlink_to('/etc')
@@ -239,32 +252,32 @@ class Protocol(Fixture):
         with self.assertRaises(common.Failure), common.snapshot(self.root):
             pass
 
-    def test_command_errors_and_timeout(self):
+    def test_command_errors_and_timeout(self) -> None:
         bad = self.tool('import sys\nprint("private-credential", file=sys.stderr)\nsys.exit(3)\n')
         with self.assertRaises(common.Failure) as failure:
-            common.run([bad], self.root, 2)
+            _ = common.run([bad], self.root, 2)
         self.assertNotIn('private-credential', str(failure.exception))
         sleepy = self.tool('import time\ntime.sleep(10)\n')
         with self.assertRaisesRegex(common.Failure, 'timed out'):
-            common.run([sleepy], self.root, 0.05)
+            _ = common.run([sleepy], self.root, 0.05)
         bad = self.tool('print("not json")\n')
         with self.assertRaisesRegex(common.Failure, 'malformed'):
-            common.command_json([bad], self.root, 2)
+            _ = common.command_json([bad], self.root, 2)
 
-    def test_root_and_missing_provider_failures(self):
-        self.write('flake.nix', '{}')
+    def test_root_and_missing_provider_failures(self) -> None:
+        _ = self.write('flake.nix', '{}')
         nested = self.root / 'nested'
         nested.mkdir()
         self.assertEqual(main.find_root(nested, 'flake.nix'), self.root)
         with self.assertRaises(common.Failure):
-            common.relative(self.root, '../outside')
-        config = {'providers': {'uv': {'root': 'missing'}}, 'tools': [], 'releases': [], 'adapters': []}
+            _ = common.relative(self.root, '../outside')
+        config: main.Inventory = {'providers': {'uv': {'root': 'missing'}}, 'tools': [], 'releases': [], 'adapters': []}
         work = main.jobs(config, self.root, network.Client())
         self.assertEqual(main.guarded(*work[0])[0].state, 'error')
 
 
 class Releases(Fixture):
-    def test_unreadable_versions_skip_without_package_exceptions(self):
+    def test_unreadable_versions_skip_without_package_exceptions(self) -> None:
         client = network.Client()
         for latest in ('php-8.5.1', 'cli/v2.0', 'snapshot', '3.0rc1'):
             with patch.object(releases, 'lookup', return_value=latest):
@@ -275,7 +288,7 @@ class Releases(Fixture):
                 row = sources.release_entry(client, {'name': 'fixture', 'repo': 'owner/repo', 'version': '1.0'})
             self.assertEqual((row.state, row.current), ('skipped', '1.0'))
 
-    def test_nvchecker_events_errors_and_no_result(self):
+    def test_nvchecker_events_errors_and_no_result(self) -> None:
         for event in ('updated', 'up-to-date'):
             data = json.dumps({'event': event, 'name': 'entry', 'version': '2.0'})
             with patch.object(releases, 'run', return_value=(data, '')):
@@ -285,7 +298,7 @@ class Releases(Fixture):
             patch.object(releases, 'run', return_value=(json.dumps(no_result), '')),
             self.assertRaises(common.UnreadableSource),
         ):
-            releases.lookup('nvchecker', {}, 2)
+            _ = releases.lookup('nvchecker', {}, 2)
         for events in (
             [],
             [None],
@@ -304,19 +317,19 @@ class Releases(Fixture):
                 self.assertEqual(rows[0].state, 'error')
                 self.assertNotIn('private-secret', rows[0].detail)
         with patch.object(releases, 'run', return_value=('broken JSON', '')), self.assertRaises(common.Failure):
-            releases.lookup('nvchecker', {}, 2)
+            _ = releases.lookup('nvchecker', {}, 2)
 
-    def test_runtime_config_is_private_temporary_and_not_in_argv(self):
+    def test_runtime_config_is_private_temporary_and_not_in_argv(self) -> None:
         import tomllib
 
-        paths = []
+        paths: list[pathlib.Path] = []
 
-        def execute(argv, root, timeout, **kwargs):
+        def execute(argv: Sequence[str], _root: pathlib.Path, _timeout: float, **_kwargs: object) -> tuple[str, str]:
             path = pathlib.Path(argv[2])
             paths.append(path)
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
-            config = tomllib.loads(path.read_text())
+            config = cast(dict[str, dict[str, str]], tomllib.loads(path.read_text()))
             self.assertEqual(config['entry']['token'], 'private-secret')
             self.assertFalse('oldver' in config['__config__'] or 'newver' in config['__config__'])
             self.assertNotIn('private-secret', str(argv))
@@ -326,23 +339,23 @@ class Releases(Fixture):
             self.assertEqual(network.Client().release('owner/repo'), ('v2.0', 'v2.0'))
         self.assertFalse(paths[0].exists())
 
-    def test_network_failure_is_not_a_tag_fallback(self):
+    def test_network_failure_is_not_a_tag_fallback(self) -> None:
         client = network.Client()
         with (
             patch.object(releases, 'lookup', side_effect=common.Failure('Lookup failed')) as lookup,
             self.assertRaises(common.Failure),
         ):
-            client.release('owner/repo')
+            _ = client.release('owner/repo')
         self.assertEqual(lookup.call_count, 1)
         with self.assertRaises(common.Failure):
-            client.release('https://secret@evil/repo')
+            _ = client.release('https://secret@evil/repo')
         with patch.object(releases, 'lookup') as lookup, self.assertRaises(common.UnreadableSource):
-            network.Client(github='https://enterprise.example/api').release('owner/repo')
+            _ = network.Client(github='https://enterprise.example/api').release('owner/repo')
         lookup.assert_not_called()
 
-    def test_registry_release_dispatch(self):
-        client = Mock()
-        client.registry_release.return_value = '1.0'
+    def test_registry_release_dispatch(self) -> None:
+        client = network.Client()
+        client.registry_release = Mock(return_value='1.0')
         row = sources.release_entry(client, {'name': 'thing', 'provider': 'pypi', 'project': 'thing', 'version': '1.0'})
         self.assertEqual(row.state, 'up-to-date')
         self.assertEqual(row.version_url, 'https://pypi.org/project/thing/1.0/')
@@ -352,15 +365,15 @@ class Releases(Fixture):
             ['provider', 'name', 'source', 'state', 'current', 'compatible', 'latest', 'detail'],
         )
 
-    def test_release_links_follow_verified_source_and_policy(self):
-        client = Mock()
-        client.release.return_value = ('v2.0+stable', '2.0')
+    def test_release_links_follow_verified_source_and_policy(self) -> None:
+        client = network.Client()
+        client.release = Mock(return_value=('v2.0+stable', '2.0'))
         release = sources.release_entry(client, {'name': 'tool', 'repo': 'owner/repo', 'version': '1.0'})
         self.assertEqual(release.version_url, 'https://github.com/owner/repo/releases/tag/v2.0%2Bstable')
         self.assertEqual(release.current_url, '')
         tagged = sources.release_entry(client, {'name': 'tool', 'repo': 'owner/repo', 'version': '1.0', 'tags': True})
         self.assertEqual(tagged.version_url, 'https://github.com/owner/repo/tree/v2.0%2Bstable')
-        client.commit.return_value = 'b' * 40
+        client.commit = Mock(return_value='b' * 40)
         action = sources.action('owner/repo@v1', 'workflow.yml', client)
         self.assertEqual(action.version_url, 'https://github.com/owner/repo/releases/tag/v2.0%2Bstable')
         for kind, project, expected in (
@@ -372,7 +385,7 @@ class Releases(Fixture):
                     'schemaVersion': 1,
                     'results': [{'name': project, 'state': 'outdated', 'current': '1.0', 'latest': '2.0'}],
                 }
-                client.registry_release.return_value = '2.0'
+                client.registry_release = Mock(return_value='2.0')
                 row = sources.release_entry(
                     client,
                     {'name': 'tool', 'provider': kind, 'project': project, 'version': '1.0', 'reporter': 'report'},
@@ -380,9 +393,9 @@ class Releases(Fixture):
                 self.assertEqual(row.version_url, expected)
                 self.assertIn('/1.0', row.current_url)
 
-    def test_nix_follows_and_owners(self):
-        root_inputs: dict[str, str | list[str]] = {'tools': 'tools', 'pkgs': 'pkgs'}
-        lock = {
+    def test_nix_follows_and_owners(self) -> None:
+        root_inputs: dict[str, object] = {'tools': 'tools', 'pkgs': 'pkgs'}
+        lock: sources.NixLock = {
             'root': 'root',
             'nodes': {
                 'root': {'inputs': root_inputs},
@@ -393,13 +406,16 @@ class Releases(Fixture):
         self.assertEqual(sources.input_owners(lock)['pkgs'], {'pkgs', 'tools/pkgs'})
         root_inputs['cycle'] = ['cycle']
         with self.assertRaises(common.Failure):
-            sources.input_owners(lock)
+            _ = sources.input_owners(lock)
 
-    def test_nix_pins_branches_and_releases(self):
-        client = Mock()
-        client.release.return_value = ('v2.0', '2.0')
-        client.commit.return_value = 'b' * 40
-        node = {'locked': {'type': 'github', 'owner': 'o', 'repo': 'r', 'rev': 'a' * 40}, 'original': {'ref': 'v1.0'}}
+    def test_nix_pins_branches_and_releases(self) -> None:
+        client = network.Client()
+        client.release = Mock(return_value=('v2.0', '2.0'))
+        client.commit = Mock(return_value='b' * 40)
+        node: sources.NixNode = {
+            'locked': {'type': 'github', 'owner': 'o', 'repo': 'r', 'rev': 'a' * 40},
+            'original': {'ref': 'v1.0'},
+        }
         row = sources.nix_input(node, 'tools/dependency', {}, self.root, client)
         self.assertEqual(row.state, 'outdated')
         self.assertEqual(row.version_url, 'https://github.com/o/r/tree/v2.0')
@@ -424,8 +440,8 @@ class Releases(Fixture):
         node['original'] = {}
         self.assertEqual(sources.nix_input(node, 'tools', {}, self.root, client).state, 'unknown')
 
-    def test_workflows_subpaths_reusable_and_local(self):
-        self.write(
+    def test_workflows_subpaths_reusable_and_local(self) -> None:
+        _ = self.write(
             '.github/workflows/test.yml',
             """jobs:
   reuse:
@@ -438,18 +454,18 @@ class Releases(Fixture):
       - uses: ${{ matrix.action }}
 """,
         )
-        client = Mock()
-        client.release.return_value = ('v1.2.0', '1.2.0')
-        client.commit.return_value = 'a' * 40
+        client = network.Client()
+        client.release = Mock(return_value=('v1.2.0', '1.2.0'))
+        client.commit = Mock(return_value='a' * 40)
         work = list(sources.workflow_jobs({}, self.root, client))
         rows = [callback() for _, callback in work]
         self.assertEqual(Counter(row.state for row in rows), {'unknown': 2, 'skipped': 1, 'up-to-date': 2})
 
 
 class Native(Fixture):
-    def test_uv_lock_uses_declared_registry_and_marks_other_sources(self):
-        self.write('pyproject.toml', '[project]\nname="test"\n')
-        self.write(
+    def test_uv_lock_uses_declared_registry_and_marks_other_sources(self) -> None:
+        _ = self.write('pyproject.toml', '[project]\nname="test"\n')
+        _ = self.write(
             'uv.lock',
             """[[package]]
 name="pkg"
@@ -465,7 +481,7 @@ version="1.0"
 source={git="https://example.test/repo"}
 """,
         )
-        response = {
+        response: uv.Document = {
             'schema': {'version': 'preview'},
             'resolution': {
                 'p': {
@@ -482,32 +498,32 @@ source={git="https://example.test/repo"}
         with patch.object(uv, 'command_json', return_value=response) as command:
             rows = list(uv.report({'exe': 'uv'}, self.root, 2))
         self.assertEqual([r.state for r in rows], ['outdated', 'skipped', 'unknown'])
-        self.assertIn('--locked', command.call_args.args[0])
+        self.assertIn('--locked', cast(list[str], command.call_args.args[0]))
         self.assertEqual(rows[0].version_url, '')
-        response['resolution']['p']['source']['registry']['url'] = 'https://pypi.org/simple'
+        response['resolution']['p']['source']['registry'] = {'url': 'https://pypi.org/simple'}
         with patch.object(uv, 'command_json', return_value=response):
             rows = list(uv.report({'exe': 'uv'}, self.root, 2))
         self.assertEqual(rows[0].version_url, 'https://pypi.org/project/pkg/2.0/')
         self.assertEqual(rows[0].current_url, 'https://pypi.org/project/pkg/1.0/')
-        response['resolution']['p'].pop('latest_version')
+        _ = response['resolution']['p'].pop('latest_version')
         with patch.object(uv, 'command_json', return_value=response):
             rows = list(uv.report({'exe': 'uv'}, self.root, 2))
             self.assertEqual((rows[0].state, rows[0].current), ('unknown', '1.0'))
             self.assertEqual(common.summary(rows)[1], 2)
 
-    def test_cargo_workspace_compatibility(self):
-        self.write('Cargo.toml', 'native-owned')
-        self.write('Cargo.lock', 'native-owned')
+    def test_cargo_workspace_compatibility(self) -> None:
+        _ = self.write('Cargo.toml', 'native-owned')
+        _ = self.write('Cargo.lock', 'native-owned')
         document = {'dependencies': [{'name': 'pkg', 'project': '1.0.0', 'compat': '1.1.0', 'latest': '2.0.0'}]}
         with patch.object(cargo, 'command_json', side_effect=[{'packages': []}, document]) as command:
             rows = list(cargo.report({'exe': 'cargo-outdated', 'cargo': 'cargo'}, self.root, 2))
         self.assertEqual(rows[0].compatible, '1.1.0')
-        self.assertIn('--locked', command.call_args_list[0].args[0])
+        self.assertIn('--locked', cast(list[str], command.call_args_list[0].args[0]))
         self.assertNotEqual(command.call_args.args[1], self.root)
 
-    def test_composer_locked_and_pnpm_workspaces(self):
-        self.write('composer.json', 'native-owned')
-        self.write('composer.lock', 'native-owned')
+    def test_composer_locked_and_pnpm_workspaces(self) -> None:
+        _ = self.write('composer.json', 'native-owned')
+        _ = self.write('composer.lock', 'native-owned')
         with patch.object(
             composer,
             'command_json',
@@ -521,11 +537,11 @@ source={git="https://example.test/repo"}
             rows = list(composer.report({'exe': 'composer'}, self.root, 2))
         self.assertEqual([row.state for row in rows], ['outdated', 'up-to-date'])
         for flag in ('--no-plugins', '--locked', '--all'):
-            self.assertIn(flag, command.call_args.args[0])
-        self.write('package.json', 'native-owned')
-        self.write('pnpm-lock.yaml', 'native-owned')
+            self.assertIn(flag, cast(list[str], command.call_args.args[0]))
+        _ = self.write('package.json', 'native-owned')
+        _ = self.write('pnpm-lock.yaml', 'native-owned')
 
-        def report(args, directory, timeout, **kwargs):
+        def report(args: Sequence[str], directory: pathlib.Path, _timeout: float, **_kwargs: object) -> object:
             if 'list' in args:
                 return [
                     {
@@ -544,9 +560,9 @@ source={git="https://example.test/repo"}
             rows = list(pnpm.report({'exe': 'pnpm', 'semver': 'versions'}, self.root, 2))
         self.assertEqual([r.state for r in rows], ['skipped', 'outdated'])
 
-    def test_npm_inventory_comes_from_lock_not_install(self):
-        self.write('package.json', 'native-owned')
-        self.write('package-lock.json', 'native-owned')
+    def test_npm_inventory_comes_from_lock_not_install(self) -> None:
+        _ = self.write('package.json', 'native-owned')
+        _ = self.write('package-lock.json', 'native-owned')
         document = {
             'schemaVersion': 1,
             'results': [
@@ -570,9 +586,9 @@ source={git="https://example.test/repo"}
         self.assertEqual(len({r.source for r in rows}), 2)
         self.assertEqual(command.call_args.args[0], ['report', 'npm', sys.executable])
 
-    def test_yarn_consumes_native_report_without_reading_lock(self):
-        self.write('package.json', 'native-owned')
-        self.write('yarn.lock', 'native-owned')
+    def test_yarn_consumes_native_report_without_reading_lock(self) -> None:
+        _ = self.write('package.json', 'native-owned')
+        _ = self.write('yarn.lock', 'native-owned')
         document = {
             'schemaVersion': 1,
             'results': [
@@ -591,8 +607,8 @@ source={git="https://example.test/repo"}
         self.assertEqual(setup.call_args.args[0][1:3], ['plugin', 'import'])
         self.assertEqual(command.call_args.args[0], ['yarn', 'nix-tools-outdated'])
 
-    def test_native_failure_cannot_mutate_source(self):
-        self.js('package.json', {})
+    def test_native_failure_cannot_mutate_source(self) -> None:
+        _ = self.js('package.json', {})
         lock = self.js(
             'package-lock.json',
             {
@@ -603,53 +619,57 @@ source={git="https://example.test/repo"}
         original = lock.read_bytes()
         tool = self.tool('import pathlib,sys\npathlib.Path("package-lock.json").write_text("broken")\nsys.exit(1)\n')
         with self.assertRaises(common.Failure):
-            list(npm.report({'exe': tool, 'reporter': tool}, self.root, 2))
+            _ = list(npm.report({'exe': tool, 'reporter': tool}, self.root, 2))
         self.assertEqual(lock.read_bytes(), original)
 
 
 class EdgeCases(Fixture):
-    def test_all_unknown_protocols_remain_nonzero(self):
+    def test_all_unknown_protocols_remain_nonzero(self) -> None:
         for state in ('unknown', 'blocked', 'error'):
             with self.subTest(state=state), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(main.report([common.Result('p', 'x', '.', state)], True), 2)
 
-    def test_invalid_result_fields_do_not_crash_report(self):
+    def test_invalid_result_fields_do_not_crash_report(self) -> None:
         # Deliberately violate the annotation to exercise runtime protocol validation.
-        for row in (common.Result('p', 'x', '.', 'invalid'), common.Result('p', 'x', '.', 'skipped', cast(str, None))):
+        for row in (
+            common.Result('p', 'x', '.', 'invalid'),
+            common.Result('p', 'x', '.', 'skipped', cast(str, cast(object, None))),
+        ):
             self.assertEqual(main.guarded('p', 'x', '.', lambda row=row: row)[0].state, 'error')
 
-    def test_redirects_never_forward_credentials_across_origins(self):
-        import urllib.request
-
+    def test_redirects_never_forward_credentials_across_origins(self) -> None:
         handler = network.SafeRedirect()
         request = urllib.request.Request('https://api.example/a', headers={'Authorization': 'Bearer secret'})
         for target in ('http://api.example/b', 'https://other.example/b', 'https://api.example:123/b'):
             with self.subTest(target=target), self.assertRaises(common.Failure):
-                handler.redirect_request(request, None, 302, 'redirect', {}, target)
-        new = handler.redirect_request(request, None, 302, 'redirect', {}, 'https://api.example/b')
+                _ = handler.redirect_request(request, io.BytesIO(), 302, 'redirect', HTTPMessage(), target)
+        new = handler.redirect_request(request, io.BytesIO(), 302, 'redirect', HTTPMessage(), 'https://api.example/b')
+        assert new is not None
         self.assertEqual(new.get_header('Authorization'), 'Bearer secret')
 
-    def test_http_auth_and_failure_redaction(self):
-        import urllib.error
-
-        opener = MagicMock()
-        opener.open.return_value.__enter__.return_value = io.StringIO('{"ok": true}')
+    def test_http_auth_and_failure_redaction(self) -> None:
+        response = MagicMock(__enter__=Mock(return_value=io.StringIO('{"ok": true}')))
+        open_request = Mock(return_value=response)
+        opener = Mock(open=open_request)
         with (
             patch.dict(os.environ, {'GH_TOKEN': 'secret-value'}),
-            patch.object(network.urllib.request, 'build_opener', return_value=opener),
+            patch.object(urllib.request, 'build_opener', return_value=opener),
         ):
             client = network.Client()
             self.assertEqual(client.api('test'), {'ok': True})
-            self.assertEqual(opener.open.call_args.args[0].get_header('Authorization'), 'Bearer secret-value')
-            opener.open.return_value.__enter__.return_value = io.StringIO('{}')
-            client.get('https://pypi.org/test')
-            self.assertIsNone(opener.open.call_args.args[0].get_header('Authorization'))
-            opener.open.side_effect = urllib.error.HTTPError('https://secret@example', 429, 'private', Message(), None)
+            self.assertEqual(
+                cast(urllib.request.Request, open_request.call_args.args[0]).get_header('Authorization'),
+                'Bearer secret-value',
+            )
+            open_request.return_value = MagicMock(__enter__=Mock(return_value=io.StringIO('{}')))
+            _ = client.get('https://pypi.org/test')
+            self.assertIsNone(cast(urllib.request.Request, open_request.call_args.args[0]).get_header('Authorization'))
+            open_request.side_effect = urllib.error.HTTPError('https://secret@example', 429, 'private', Message(), None)
             with self.assertRaisesRegex(common.Failure, 'HTTP 429') as caught:
-                client.api('limited')
+                _ = client.api('limited')
             self.assertNotIn('secret', str(caught.exception))
 
-    def test_github_quota_preflight_stops_repeated_lookups(self):
+    def test_github_quota_preflight_stops_repeated_lookups(self) -> None:
         client = network.Client(preflight=True)
         quota = {'resources': {'core': {'remaining': 0, 'reset': 1791025832}}}
         with (
@@ -658,12 +678,12 @@ class EdgeCases(Fixture):
         ):
             for call in (lambda: client.release('owner/repo'), lambda: client.api('repos/owner/repo')):
                 with self.assertRaisesRegex(common.Failure, 'GitHub API quota exhausted') as caught:
-                    call()
+                    _ = call()
                 self.assertIn('GH_TOKEN or GITHUB_TOKEN', str(caught.exception))
             self.assertEqual(request.call_count, 1)
             release.assert_not_called()
 
-    def test_github_quota_preflight_allows_available_quota(self):
+    def test_github_quota_preflight_allows_available_quota(self) -> None:
         client = network.Client(preflight=True)
         quota = {'resources': {'core': {'remaining': 4, 'reset': 1791025832}}}
         with (
@@ -675,13 +695,14 @@ class EdgeCases(Fixture):
             request.assert_called_once_with('https://api.github.com/rate_limit', github=True)
             self.assertEqual(release.call_count, 2)
 
-    def test_github_quota_preflight_failure_does_not_block_release(self):
-        for document in (
+    def test_github_quota_preflight_failure_does_not_block_release(self) -> None:
+        documents: tuple[object, ...] = (
             [],
             {'resources': []},
             {'resources': {'core': []}},
             {'resources': {'core': {'remaining': False}}},
-        ):
+        )
+        for document in documents:
             with self.subTest(document=document):
                 client = network.Client(preflight=True)
                 with (
@@ -701,18 +722,27 @@ class EdgeCases(Fixture):
             self.assertEqual(client.release('owner/repo'), ('v2', '2'))
             probe.assert_called_once()
             self.assertEqual(release.call_count, 2)
-        self.assertIn('HTTP 403', str(network.Client._http_failure(403, None, True)))
+        forbidden = urllib.error.HTTPError('https://api.github.com/test', 403, 'Forbidden', Message(), None)
+        with (
+            patch.object(urllib.request, 'build_opener', return_value=Mock(open=Mock(side_effect=forbidden))),
+            self.assertRaisesRegex(common.Failure, 'HTTP 403'),
+        ):
+            _ = network.Client().api('test')
 
-    def test_github_quota_preflight_preserves_confirmed_access_failures(self):
+    def test_github_quota_preflight_preserves_confirmed_access_failures(self) -> None:
         for code, headers, diagnostic in (
             (403, {'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1791025832'}, 'quota exhausted'),
             (401, {}, 'authentication failed'),
         ):
             with self.subTest(code=code):
                 client = network.Client(preflight=True)
-                failure = client._http_failure(code, headers, True)
+                response_headers = Message()
+                for key, value in headers.items():
+                    response_headers[key] = value
+                failure = urllib.error.HTTPError('https://api.github.com/rate_limit', code, '', response_headers, None)
+                open_request = Mock(side_effect=failure)
                 with (
-                    patch.object(client, '_get', side_effect=failure) as probe,
+                    patch.object(urllib.request, 'build_opener', return_value=Mock(open=open_request)),
                     patch.object(network, 'source') as release,
                 ):
                     for call, target in (
@@ -720,27 +750,26 @@ class EdgeCases(Fixture):
                         (client.api, 'repos/owner/repo'),
                     ):
                         with self.assertRaisesRegex(common.Failure, diagnostic):
-                            call(target)
-                    probe.assert_called_once()
+                            _ = call(target)
+                    open_request.assert_called_once()
                     release.assert_not_called()
 
-    def test_github_rate_limit_headers_are_actionable_and_safe(self):
-        import urllib.error
-
+    def test_github_rate_limit_headers_are_actionable_and_safe(self) -> None:
         headers = Message()
         headers['x-ratelimit-remaining'] = '0'
         headers['x-ratelimit-reset'] = '1791025832'
-        opener = MagicMock()
-        opener.open.side_effect = urllib.error.HTTPError('https://secret@example', 403, 'private', headers, None)
+        opener = Mock(
+            open=Mock(side_effect=urllib.error.HTTPError('https://secret@example', 403, 'private', headers, None))
+        )
         with (
-            patch.object(network.urllib.request, 'build_opener', return_value=opener),
+            patch.object(urllib.request, 'build_opener', return_value=opener),
             self.assertRaisesRegex(common.Failure, 'GitHub API quota exhausted') as caught,
         ):
-            network.Client().api('repos/owner/repo')
+            _ = network.Client().api('repos/owner/repo')
         self.assertNotIn('secret', str(caught.exception))
         self.assertIn('UTC', str(caught.exception))
 
-    def test_rich_table_keeps_rows_and_deduplicates_finding_details(self):
+    def test_rich_table_keeps_rows_and_deduplicates_finding_details(self) -> None:
         rows = [
             common.Result('githubActions', name, '.', 'error', detail='GitHub API quota exhausted')
             for name in ('one', 'two', 'three')
@@ -753,9 +782,9 @@ class EdgeCases(Fixture):
         self.assertEqual(plain.getvalue().count('GitHub API quota exhausted'), 1)
         with contextlib.redirect_stdout(io.StringIO()) as machine:
             self.assertEqual(main.report(rows, True), 2)
-        self.assertEqual(len(json.loads(machine.getvalue())['results']), 3)
+        self.assertEqual(len(cast(dict[str, list[object]], json.loads(machine.getvalue()))['results']), 3)
 
-    def test_redirected_report_is_terse_without_hiding_skips_or_compatibility(self):
+    def test_redirected_report_is_terse_without_hiding_skips_or_compatibility(self) -> None:
         rows = [
             common.Result('tools', 'current-tool', '.', 'up-to-date', '1.0'),
             common.Result('tools', 'local-tool', '.', 'skipped', '1.0', detail='Local package'),
@@ -786,9 +815,9 @@ class EdgeCases(Fixture):
         self.assertIn('upgrade-breaks-target: Upgrade breaks target CPU', policy.getvalue())
         with contextlib.redirect_stdout(io.StringIO()) as machine:
             self.assertEqual(main.report(rows, True), 1)
-        self.assertEqual(len(json.loads(machine.getvalue())['results']), 4)
+        self.assertEqual(len(cast(dict[str, list[object]], json.loads(machine.getvalue()))['results']), 4)
 
-    def test_terse_adapter_fields_cannot_forge_a_verdict_line(self):
+    def test_terse_adapter_fields_cannot_forge_a_verdict_line(self) -> None:
         forged = 'OUTDATED: UP-TO-DATE (1 up-to-date)'
         document = {
             'schemaVersion': 1,
@@ -814,14 +843,14 @@ class EdgeCases(Fixture):
             self.assertEqual(main.report(rows, True), 2)
         self.assertEqual(json.loads(machine.getvalue())['results'][0]['current'], f'1\n{forged}')
 
-    def test_note_codes_are_readable_and_disambiguate_similar_explanations(self):
-        used = set()
+    def test_note_codes_are_readable_and_disambiguate_similar_explanations(self) -> None:
+        used: set[str] = set()
         self.assertEqual(main.note_code('GitHub API quota exhausted; retry later', used), 'github-api-quota')
         self.assertEqual(main.note_code('NixOS/nixpkgs: branch moved', used), 'nixos-nixpkgs')
         self.assertEqual(main.note_code('NixOS/nixpkgs: another branch moved', used), 'nixos-nixpkgs-2')
         self.assertEqual(main.note_code('UV did not report a version; source failed', used), 'uv-did-not-report')
 
-    def test_finding_details_style_known_identifiers_without_changing_json(self):
+    def test_finding_details_style_known_identifiers_without_changing_json(self) -> None:
         detail = 'NixOS/nixpkgs: main -> stable. Update the owning top-level input: nix-gritql, uv2nix'
         identifiers = ('NixOS/nixpkgs', 'nix-gritql', 'uv2nix')
         styled = main.styled_detail(detail, identifiers)
@@ -856,7 +885,7 @@ class EdgeCases(Fixture):
         self.assertIn('upstream-availability', output.getvalue())
         self.assertIn('Upstream availability', output.getvalue())
 
-    def test_rich_table_compacts_nix_paths_and_revisions_but_json_retains_them(self):
+    def test_rich_table_compacts_nix_paths_and_revisions_but_json_retains_them(self) -> None:
         first = 'nix-tools/pyproject-build-systems/nixpkgs'
         label = f'{first}, nix-tools/uv2nix/nixpkgs, uv2nix/nixpkgs'
         revision = 'a' * 40
@@ -876,7 +905,7 @@ class EdgeCases(Fixture):
         self.assertEqual(json.loads(machine.getvalue())['results'][0]['name'], label)
         self.assertEqual(json.loads(machine.getvalue())['results'][0]['current'], revision)
 
-    def test_rich_table_stripes_tty_rows_without_interpreting_names_as_markup(self):
+    def test_rich_table_stripes_tty_rows_without_interpreting_names_as_markup(self) -> None:
         rows = [
             common.Result('tools', '[red]literal[/red]', '.', 'outdated', '1', latest='2'),
             common.Result('tools', 'second', '.', 'up-to-date', '2', latest='2'),
@@ -887,7 +916,7 @@ class EdgeCases(Fixture):
         self.assertIn('[red]literal[/red]', output.getvalue())
         self.assertIn('\x1b[48', output.getvalue())
 
-    def test_rich_tables_use_content_width_and_terminal_only_release_links(self):
+    def test_rich_tables_use_content_width_and_terminal_only_release_links(self) -> None:
         url = 'https://github.com/owner/repo/releases/tag/v2.0'
         old_url = 'https://github.com/owner/repo/releases/tag/v1.0'
         row = common.Result(
@@ -896,7 +925,8 @@ class EdgeCases(Fixture):
         cell = main.version_cell(row, True)
         self.assertEqual(cell.plain, '1.0 → 2.0')
         self.assertEqual(
-            [(cell.plain[s.start : s.end], s.style.link) for s in cell.spans], [('1.0', old_url), ('2.0', url)]
+            [(cell.plain[s.start : s.end], s.style.link) for s in cell.spans if isinstance(s.style, Style)],
+            [('1.0', old_url), ('2.0', url)],
         )
         with patch.dict(os.environ, {'TERM': 'xterm-256color', 'COLUMNS': '160'}, clear=True):
             output = Terminal()
@@ -933,9 +963,12 @@ class EdgeCases(Fixture):
             self.assertIn(';' + url + '\x1b\\', output.getvalue())
         no_old = common.Result('releases', 'tool', '.', 'outdated', '1.0', latest='2.0', version_url=url)
         cell = main.version_cell(no_old, True)
-        self.assertEqual([(cell.plain[s.start : s.end], s.style.link) for s in cell.spans], [('2.0', url)])
+        self.assertEqual(
+            [(cell.plain[s.start : s.end], s.style.link) for s in cell.spans if isinstance(s.style, Style)],
+            [('2.0', url)],
+        )
 
-    def test_narrow_terminal_keeps_state_readable(self):
+    def test_narrow_terminal_keeps_state_readable(self) -> None:
         row = common.Result('nix', 'long-repository-name/long-input-name', '.', 'up-to-date', 'a' * 40)
         with patch.dict(os.environ, {'TERM': 'xterm-256color', 'COLUMNS': '80'}, clear=True):
             output = Terminal()
@@ -943,7 +976,7 @@ class EdgeCases(Fixture):
                 self.assertEqual(main.report([row], False), 0)
         self.assertIn('up-to-date', output.getvalue())
 
-    def test_progress_uses_completed_jobs_but_preserves_report_order(self):
+    def test_progress_uses_completed_jobs_but_preserves_report_order(self) -> None:
         release_first = threading.Event()
 
         def first():
@@ -952,36 +985,39 @@ class EdgeCases(Fixture):
             return common.Result('test', 'first', '.', 'up-to-date')
 
         class ProgressProbe:
-            def __init__(self):
+            started: bool
+            calls: list[tuple[object, ...]]
+
+            def __init__(self) -> None:
                 self.started = False
                 self.calls = []
 
-            def __enter__(self):
+            def __enter__(self) -> Self:
                 self.started = True
                 return self
 
-            def __exit__(self, *args):
+            def __exit__(self, *_args: object) -> None:
                 self.started = False
 
-            def add_task(self, description, total):
+            def add_task(self, description: str, total: int | None) -> int:
                 self.calls.append(('add', description, total))
                 return 7
 
-            def update(self, task, **kwargs):
+            def update(self, task: int, **kwargs: object) -> None:
                 self.calls.append(('update', task, kwargs))
 
-            def advance(self, task):
+            def advance(self, task: int) -> None:
                 self.calls.append(('advance', task))
                 if sum(call[0] == 'advance' for call in self.calls) == 1:
                     release_first.set()
 
         probe = ProgressProbe()
-        jobs = [
+        jobs: list[main.Job] = [
             ('test', 'first', '.', first),
             ('test', 'second', '.', lambda: common.Result('test', 'second', '.', 'up-to-date')),
         ]
 
-        def inventory(*args):
+        def inventory(*_args: object) -> list[main.Job]:
             self.assertTrue(probe.started)
             self.assertEqual(probe.calls[0], ('add', 'Discovering inputs', None))
             return jobs
@@ -990,14 +1026,19 @@ class EdgeCases(Fixture):
             patch.object(main, 'progress_display', return_value=probe),
             patch.object(main, 'jobs', side_effect=inventory),
         ):
-            rows = main.collect_jobs({'concurrency': 2}, self.root, Mock(), Mock())
+            rows = main.collect_jobs(
+                {'providers': {}, 'tools': [], 'releases': [], 'adapters': [], 'concurrency': 2},
+                self.root,
+                Mock(),
+                Mock(),
+            )
         self.assertEqual([row.name for row in rows], ['first', 'second'])
         self.assertEqual(
             probe.calls[1], ('update', 7, {'description': 'Checking dependencies', 'total': 2, 'completed': 0})
         )
         self.assertEqual(probe.calls[2:], [('advance', 7), ('advance', 7)])
 
-    def test_release_policy_custom_patterns_and_empty(self):
+    def test_release_policy_custom_patterns_and_empty(self) -> None:
         client = network.Client()
         with patch.object(releases, 'lookup', return_value='cli/v2.0'):
             self.assertEqual(
@@ -1005,25 +1046,28 @@ class EdgeCases(Fixture):
             )
         client.api = Mock(return_value={'sha': 'not-a-commit'})
         with self.assertRaises(common.Failure):
-            client.commit('o/r', 'a/b')
+            _ = client.commit('o/r', 'a/b')
 
-    def test_git_tags_and_annotated_nix_tags(self):
-        client = Mock(timeout=2)
-        client.registry_release.return_value = '2.0'
+    def test_git_tags_and_annotated_nix_tags(self) -> None:
+        client = network.Client(timeout=2)
+        client.registry_release = Mock(return_value='2.0')
         row = sources.release_entry(
             client,
             {'name': 'git', 'version': '1.0', 'provider': 'git', 'url': 'https://example.test/r'},
         )
         self.assertEqual(row.latest, '2.0')
-        node = {'locked': {'type': 'git', 'rev': 'b', 'url': 'https://example.test/r'}, 'original': {'ref': 'v1'}}
+        node: sources.NixNode = {
+            'locked': {'type': 'git', 'rev': 'b', 'url': 'https://example.test/r'},
+            'original': {'ref': 'v1'},
+        }
         with patch.object(sources, 'run', return_value=('a\trefs/tags/v1\nb\trefs/tags/v1^{}\n', '')):
             self.assertEqual(sources.nix_input(node, 'n', {'git': 'git'}, self.root, client).state, 'up-to-date')
         with patch.object(sources, 'run', return_value=('', '')), self.assertRaises(common.Failure):
-            sources.nix_input(node, 'n', {'git': 'git'}, self.root, client)
+            _ = sources.nix_input(node, 'n', {'git': 'git'}, self.root, client)
 
-    def test_native_empty_and_invalid_schemas(self):
+    def test_native_empty_and_invalid_schemas(self) -> None:
         for name in ('package.json', 'composer.json', 'composer.lock', 'package-lock.json', 'pnpm-lock.yaml'):
-            self.write(name, 'native-owned')
+            _ = self.write(name, 'native-owned')
         with patch.object(composer, 'command_json', return_value={'locked': []}):
             self.assertEqual(
                 next(composer.report({'exe': sys.executable, 'reporter': 'tool'}, self.root, 2)).state, 'up-to-date'
@@ -1033,7 +1077,8 @@ class EdgeCases(Fixture):
                 next(npm.report({'exe': sys.executable, 'reporter': 'tool'}, self.root, 2)).state, 'up-to-date'
             )
         for provider in ('npm', 'composer', 'pnpm'):
-            for document in ({}, [], {'schemaVersion': 1, 'results': [{'state': 'up-to-date'}]}):
+            documents: tuple[object, ...] = ({}, [], {'schemaVersion': 1, 'results': [{'state': 'up-to-date'}]})
+            for document in documents:
                 with (
                     self.subTest(provider=provider, document=document),
                     patch.object(sys.modules[PROVIDERS[provider].__module__], 'command_json', return_value=document),
@@ -1048,9 +1093,9 @@ class EdgeCases(Fixture):
                     )
                     self.assertEqual(common.summary(rows)[1], 2)
 
-    def test_npm_preserves_native_source_classification(self):
-        self.write('package.json', 'native-owned')
-        self.write('package-lock.json', 'native-owned')
+    def test_npm_preserves_native_source_classification(self) -> None:
+        _ = self.write('package.json', 'native-owned')
+        _ = self.write('package-lock.json', 'native-owned')
         document = {
             'schemaVersion': 1,
             'results': [
@@ -1064,7 +1109,7 @@ class EdgeCases(Fixture):
         self.assertEqual([r.state for r in rows], ['unknown', 'unknown', 'skipped'])
         self.assertEqual(rows[0].name, 'real-package')
 
-    def test_enabled_missing_inputs_are_errors_for_every_provider(self):
+    def test_enabled_missing_inputs_are_errors_for_every_provider(self) -> None:
         for provider in PROVIDERS:
             with self.subTest(provider=provider):
                 rows = main.guarded(
@@ -1075,13 +1120,13 @@ class EdgeCases(Fixture):
                 )
                 self.assertEqual([r.state for r in rows], ['error'])
 
-    def test_custom_adapter_and_cli_keep_partial_results(self):
-        self.write('flake.nix', '{}')
-        self.write('original', 'preserved')
+    def test_custom_adapter_and_cli_keep_partial_results(self) -> None:
+        _ = self.write('flake.nix', '{}')
+        _ = self.write('original', 'preserved')
         adapter = self.tool(
             'import pathlib,json\npathlib.Path("original").write_text("changed")\nprint(json.dumps({"schemaVersion":1,"results":[{"name":"custom","state":"outdated","current":"1","latest":"2"}]}))\n'
         )
-        cfg = {
+        cfg: main.Config = {
             'treeRootFile': 'flake.nix',
             'timeout': 2,
             'concurrency': 2,
@@ -1107,11 +1152,11 @@ class EdgeCases(Fixture):
             check=False,
         )
         self.assertEqual(result.returncode, 2, result.stderr)
-        report = json.loads(result.stdout)
+        report = cast(dict[str, object], json.loads(result.stdout))
         self.assertEqual(report['counts'], {'error': 1, 'outdated': 1})
         self.assertEqual(self.root.joinpath('original').read_text(), 'preserved')
         cfg['providers'] = {}
-        config.write_text(json.dumps(cfg))
+        _ = config.write_text(json.dumps(cfg))
         result = subprocess.run(
             [sys.executable, str(pathlib.Path(main.__file__)), '--config', str(config), '--no-color'],
             cwd=self.root,
@@ -1123,23 +1168,23 @@ class EdgeCases(Fixture):
         self.assertIn('OUTDATED: OUTDATED', result.stdout)
         self.assertNotIn('Checking dependencies', result.stdout)
 
-    def test_each_project_backend_preserves_original_on_failure(self):
-        self.write('Cargo.toml', '[workspace]\n')
-        self.write('Cargo.lock', 'version=4\n')
-        self.write('pyproject.toml', '[project]\n')
-        self.write('uv.lock', 'version=1\n')
-        self.js('package.json', {'packageManager': 'yarn@4.0.0'})
-        self.write('yarn.lock', '__metadata: {version: 8}\n')
-        self.write('pnpm-lock.yaml', 'importers: {}\n')
-        self.js(
+    def test_each_project_backend_preserves_original_on_failure(self) -> None:
+        _ = self.write('Cargo.toml', '[workspace]\n')
+        _ = self.write('Cargo.lock', 'version=4\n')
+        _ = self.write('pyproject.toml', '[project]\n')
+        _ = self.write('uv.lock', 'version=1\n')
+        _ = self.js('package.json', {'packageManager': 'yarn@4.0.0'})
+        _ = self.write('yarn.lock', '__metadata: {version: 8}\n')
+        _ = self.write('pnpm-lock.yaml', 'importers: {}\n')
+        _ = self.js(
             'package-lock.json',
             {
                 'lockfileVersion': 3,
                 'packages': {'node_modules/pkg': {'version': '1.0.0', 'resolved': 'https://registry/file.tgz'}},
             },
         )
-        self.js('composer.json', {})
-        self.js('composer.lock', {})
+        _ = self.js('composer.json', {})
+        _ = self.js('composer.lock', {})
         tool = self.tool(
             'import pathlib,sys\nfor p in pathlib.Path.cwd().iterdir():\n if p.is_file(): p.write_text("mutated")\nsys.exit(3)\n'
         )
@@ -1159,7 +1204,7 @@ class EdgeCases(Fixture):
 
 
 class MoreContracts(Fixture):
-    def test_tyro_cli_help_and_option_errors(self):
+    def test_tyro_cli_help_and_option_errors(self) -> None:
         script = str(pathlib.Path(main.__file__))
         help_result = subprocess.run([sys.executable, script, '--help'], capture_output=True, text=True, check=False)
         self.assertEqual(help_result.returncode, 0, help_result.stderr)
@@ -1172,7 +1217,7 @@ class MoreContracts(Fixture):
                 )
                 self.assertEqual(result.returncode, 2)
 
-    def test_main_runtime_contract_and_repeat_invocation(self):
+    def test_main_runtime_contract_and_repeat_invocation(self) -> None:
         config = self.js(
             'report.json',
             {
@@ -1186,29 +1231,29 @@ class MoreContracts(Fixture):
                 'adapters': [],
             },
         )
-        self.write('flake.nix', '{}')
+        _ = self.write('flake.nix', '{}')
         argv = ['outdated', '--config', str(config), '--root', str(self.root), '--json']
         with patch.object(sys, 'argv', argv), contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(main.main(), 2)
         self.assertEqual(json.loads(output.getvalue())['state'], 'ERROR')
-        client = Mock()
-        client.release.side_effect = [('v1.0', '1.0'), ('v2.0', '2.0')]
-        document = json.loads(config.read_text())
+        client = network.Client()
+        client.release = Mock(side_effect=[('v1.0', '1.0'), ('v2.0', '2.0')])
+        document = cast(main.Config, json.loads(config.read_text()))
         document['releases'] = [{'name': 'fixture', 'version': '1.0', 'repo': 'o/r'}]
-        config.write_text(json.dumps(document))
+        _ = config.write_text(json.dumps(document))
         with patch.object(main, 'Client', return_value=client), patch.object(sys, 'argv', argv):
             for code in (0, 1):
                 with contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(main.main(), code)
         self.assertEqual(client.release.call_count, 2)
-        config.write_text('{')
+        _ = config.write_text('{')
         with patch.object(sys, 'argv', argv), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(main.main(), 2)
 
-    def test_command_adapter_process_and_schema_errors(self):
+    def test_command_adapter_process_and_schema_errors(self) -> None:
         for body in ('print("not JSON")', 'print("{}")', 'import sys; sys.exit(1)'):
             exe = self.tool(body + '\n')
-            config = {
+            config: main.Inventory = {
                 'providers': {},
                 'tools': [],
                 'releases': [],
@@ -1217,58 +1262,65 @@ class MoreContracts(Fixture):
             rows = main.guarded(*main.jobs(config, self.root, network.Client())[0])
             self.assertEqual(common.summary(rows)[1], 2)
         with self.assertRaises(common.Failure):
-            common.compare('p', 'x', '.', '', '')
+            _ = common.compare('p', 'x', '.', '', '')
         with self.assertRaises(common.Failure):
-            common.validate_adapter({'schemaVersion': True, 'results': [{'name': 'x', 'state': 'skipped'}]}, 'p', '.')
+            _ = common.validate_adapter(
+                {'schemaVersion': True, 'results': [{'name': 'x', 'state': 'skipped'}]}, 'p', '.'
+            )
 
-    def test_nix_empty_graph_missing_nodes_and_follows_shapes(self):
-        self.write('flake.lock', 'native-owned')
-        self.write('flake.nix', 'native-owned')
+    def test_nix_empty_graph_missing_nodes_and_follows_shapes(self) -> None:
+        _ = self.write('flake.lock', 'native-owned')
+        _ = self.write('flake.nix', 'native-owned')
         with patch.object(
             sources, 'command_json', return_value={'locks': {'root': 'root', 'nodes': {'root': {}}}}
         ) as command:
             rows = [callback() for _, callback in sources.nix_jobs({'exe': 'nix'}, self.root, network.Client())]
         self.assertEqual(rows[0].state, 'up-to-date')
-        self.assertIn('--no-update-lock-file', command.call_args.args[0])
+        self.assertIn('--no-update-lock-file', cast(list[str], command.call_args.args[0]))
         for edge in ('missing', 1, [1]):
-            lock = {'root': 'root', 'nodes': {'root': {'inputs': {'bad': edge}}}}
+            lock: sources.NixLock = {'root': 'root', 'nodes': {'root': {'inputs': {'bad': edge}}}}
             with self.assertRaises(common.Failure):
-                sources.input_owners(lock)
+                _ = sources.input_owners(lock)
         lock = {'root': 'root', 'nodes': {'root': {'inputs': {'bad': 'bad'}}, 'bad': {}}}
         with patch.object(sources, 'command_json', return_value={'locks': lock}), self.assertRaises(common.Failure):
-            list(sources.nix_jobs({'exe': 'nix'}, self.root, network.Client()))
+            _ = list(sources.nix_jobs({'exe': 'nix'}, self.root, network.Client()))
 
-    def test_release_unknowns_pins_and_invalid_registries(self):
-        client = Mock()
-        for item, state in (({'unknown': 'custom'}, 'unknown'), ({'skip': 'intentional'}, 'skipped')):
-            row = sources.release_entry(client, {'name': 'fixture'} | item)
+    def test_release_unknowns_pins_and_invalid_registries(self) -> None:
+        client = network.Client()
+        client.release = Mock()
+        entries: tuple[tuple[sources.ReleaseEntry, str], ...] = (
+            ({'name': 'fixture', 'unknown': 'custom'}, 'unknown'),
+            ({'name': 'fixture', 'skip': 'intentional'}, 'skipped'),
+        )
+        for item, state in entries:
+            row = sources.release_entry(client, item)
             self.assertEqual(row.state, state)
             client.release.assert_not_called()
-        client.get.return_value = {'releases': {}}
+        client.registry_release = Mock(side_effect=common.Failure('No releases'))
         with self.assertRaises(common.Failure):
-            sources.release_entry(client, {'name': 'fixture', 'provider': 'pypi', 'project': 'fixture'})
+            _ = sources.release_entry(client, {'name': 'fixture', 'provider': 'pypi', 'project': 'fixture'})
         with self.assertRaises(common.Failure):
-            sources.release_entry(client, {'name': 'fixture', 'provider': 'invalid'})
+            _ = sources.release_entry(client, {'name': 'fixture', 'provider': 'invalid'})
         real = network.Client()
         with patch.object(releases, 'lookup', return_value='v15'):
             self.assertEqual(real.release('o/r'), ('v15', 'v15'))
 
-    def test_workflow_missing_malformed_and_no_external_actions(self):
+    def test_workflow_missing_malformed_and_no_external_actions(self) -> None:
         with self.assertRaises(common.Failure):
-            list(sources.workflow_jobs({}, self.root, network.Client()))
+            _ = list(sources.workflow_jobs({}, self.root, network.Client()))
         path = self.write('.github/workflows/test.yml', 'jobs: {build: {steps: []}}\n')
         rows = [callback() for _, callback in sources.workflow_jobs({}, self.root, network.Client())]
         self.assertEqual(rows[0].state, 'up-to-date')
         for text in ('[]', 'jobs: []', 'jobs: {build: invalid}'):
-            path.write_text(text)
+            _ = path.write_text(text)
             with self.assertRaises(common.Failure):
-                list(sources.workflow_jobs({}, self.root, network.Client()))
+                _ = list(sources.workflow_jobs({}, self.root, network.Client()))
         with self.assertRaises(common.Failure):
-            sources.action('unrecognised', '.github/workflows/test.yml', network.Client())
+            _ = sources.action('unrecognised', '.github/workflows/test.yml', network.Client())
 
-    def test_native_unknown_graph_and_dev_branches(self):
-        self.write('Cargo.toml', 'native-owned')
-        self.write('Cargo.lock', 'native-owned')
+    def test_native_unknown_graph_and_dev_branches(self) -> None:
+        _ = self.write('Cargo.toml', 'native-owned')
+        _ = self.write('Cargo.lock', 'native-owned')
         inventory = {'packages': [{'name': 'git', 'version': '1.0', 'source': 'git+https://example.test/repo'}]}
         document = {'dependencies': [{'name': 'changed', 'project': '---', 'compat': '---', 'latest': 'Removed'}]}
         with patch.object(cargo, 'command_json', side_effect=[inventory, document]):
@@ -1277,36 +1329,37 @@ class MoreContracts(Fixture):
         with patch.object(cargo, 'command_json', side_effect=[inventory, {'dependencies': []}]):
             rows = list(cargo.report({'exe': 'tool', 'cargo': 'cargo'}, self.root, 1))
         self.assertEqual(common.summary(rows)[1], 2)
-        self.write('composer.json', 'native-owned')
-        self.write('composer.lock', 'native-owned')
+        _ = self.write('composer.json', 'native-owned')
+        _ = self.write('composer.lock', 'native-owned')
         with patch.object(
             composer, 'command_json', return_value={'locked': [{'name': 'branch', 'version': 'dev-main'}]}
         ):
             rows = list(composer.report({'exe': sys.executable, 'reporter': 'tool'}, self.root, 1))
         self.assertEqual(rows[0].state, 'unknown')
 
-    def test_native_yarn_invalid_report_and_failed_plugin_setup(self):
-        self.write('package.json', 'native-owned')
-        self.write('yarn.lock', 'native-owned')
-        for document in (
+    def test_native_yarn_invalid_report_and_failed_plugin_setup(self) -> None:
+        _ = self.write('package.json', 'native-owned')
+        _ = self.write('yarn.lock', 'native-owned')
+        documents: tuple[object, ...] = (
             {},
             {'schemaVersion': 1, 'results': []},
             {'schemaVersion': 1, 'results': [{'name': 'x', 'state': 'invalid'}]},
-        ):
+        )
+        for document in documents:
             with (
                 patch.object(yarn, 'run'),
                 patch.object(yarn, 'command_json', return_value=document),
                 self.assertRaises(common.Failure),
             ):
-                list(yarn.report({'exe': sys.executable, 'reporter': 'tool'}, self.root, 1))
+                _ = list(yarn.report({'exe': sys.executable, 'reporter': 'tool'}, self.root, 1))
         with (
             patch.object(yarn, 'run', side_effect=common.Failure('setup failed')),
             patch.object(yarn, 'command_json') as report,
             self.assertRaises(common.Failure),
         ):
-            list(yarn.report({'exe': sys.executable, 'reporter': 'tool'}, self.root, 1))
+            _ = list(yarn.report({'exe': sys.executable, 'reporter': 'tool'}, self.root, 1))
         report.assert_not_called()
 
 
 if __name__ == '__main__':
-    unittest.main()
+    _ = unittest.main()

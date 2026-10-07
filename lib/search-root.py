@@ -5,7 +5,7 @@ import stat
 import sys
 
 
-def main():
+def main() -> int:
     try:
         mode = os.stat(sys.argv[1]).st_mode
     except FileNotFoundError:

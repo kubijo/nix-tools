@@ -8,13 +8,93 @@ import stat
 import subprocess
 import sys
 import tempfile
+from collections.abc import Mapping, Sequence
+from typing import NotRequired, TypedDict, cast
 
 
-def command(arguments, **kwargs):
-    return subprocess.check_output(arguments, **kwargs)
+class Scope(TypedDict):
+    includes: list[str]
+    exclude: NotRequired[list[str]]
 
 
-def paths(arguments, *, discovery=False):
+class Declaration(Scope):
+    kind: str
+    description: str
+
+
+class ExceptionScope(Scope):
+    reason: str
+    stages: list[str]
+
+
+class Check(TypedDict):
+    name: str
+    kind: str
+
+
+class ProjectCheck(Check, Declaration):
+    scope: str
+
+
+class Waiver(TypedDict):
+    reason: str
+    stages: list[str]
+
+
+class FileRow(TypedDict):
+    path: str
+    in_flake_source: bool
+    present: bool
+    format: list[Check]
+    lint: list[Check]
+    project_checks: list[ProjectCheck]
+    exceptions: list[Waiver]
+    gaps: list[str]
+
+
+class Checker(Check):
+    searchPaths: list[str]
+    discoveryArgs: list[list[str]]
+
+
+class Debian(TypedDict):
+    command: str
+    excludes: list[str]
+
+
+class Config(TypedDict):
+    treeRootFile: str
+    src: str
+    formatKinds: dict[str, str]
+    treefmtConfig: str
+    files: list[Checker]
+    debian: Debian | None
+    declarations: dict[str, Declaration]
+    exceptions: list[ExceptionScope]
+    required: list[str]
+    projectNames: list[str]
+
+
+class Omitted(TypedDict):
+    path: str
+    reason: str
+    in_flake_source: NotRequired[bool]
+
+
+class Audit(TypedDict):
+    version: int
+    scope: str
+    files: list[FileRow]
+    untracked: list[Omitted]
+    ignored: list[Omitted]
+    unmapped_project_checks: list[str]
+
+
+def command(arguments: Sequence[str], *, env: Mapping[str, str] | None = None) -> bytes:
+    return subprocess.check_output(arguments, env=env)
+
+
+def paths(arguments: Sequence[str], *, discovery: bool = False) -> set[str]:
     if discovery:
         result = subprocess.run(arguments, capture_output=True, check=False)
         # fd reports traversal errors without necessarily returning nonzero.
@@ -27,8 +107,8 @@ def paths(arguments, *, discovery=False):
     return {os.fsdecode(value).removeprefix('./') for value in output.split(b'\0') if value}
 
 
-def scope(spec):
-    def select(patterns):
+def scope(spec: Scope) -> set[str]:
+    def select(patterns: Sequence[str]) -> set[str]:
         # Git glob pathspecs make these declarations explicit and auditable.
         return (
             paths(
@@ -42,7 +122,7 @@ def scope(spec):
     return select(spec['includes']) - select(spec.get('exclude', []))
 
 
-def report(config):
+def report(config: Config) -> Audit:
     root = pathlib.Path.cwd()
     while not (root / config['treeRootFile']).exists():
         if root == root.parent:
@@ -55,7 +135,7 @@ def report(config):
     tracked = paths(['git', 'ls-files', '--cached', '-z'])
     untracked = paths(['git', 'ls-files', '--others', '--exclude-standard', '-z'])
     ignored = paths(['git', 'ls-files', '--others', '--ignored', '--exclude-standard', '-z'])
-    rows = {
+    rows: dict[str, FileRow] = {
         path: {
             'path': path,
             'in_flake_source': os.path.lexists(pathlib.Path(config['src']) / path),
@@ -64,13 +144,14 @@ def report(config):
             'lint': [],
             'project_checks': [],
             'exceptions': [],
+            'gaps': [],
         }
         for path in sorted(tracked)
     }
     with tempfile.TemporaryDirectory(prefix='nix-tools-coverage-') as directory:
         env = os.environ | {'NIX_TOOLS_COVERAGE_RECORDS': directory, 'XDG_CACHE_HOME': directory}
         if config['formatKinds']:
-            subprocess.run(
+            _ = subprocess.run(
                 [
                     'treefmt',
                     '--config-file',
@@ -86,13 +167,13 @@ def report(config):
                 stdout=sys.stderr,
             )
         for record in pathlib.Path(directory).glob('*.json'):
-            name, files = json.loads(record.read_text())
+            name, files = cast(tuple[str, list[str]], json.loads(record.read_text()))
             for path in files:
                 path = os.path.relpath(path, root)
                 if path in rows:
                     rows[path]['format'].append({'name': name, 'kind': config['formatKinds'][name]})
     for checker in config['files']:
-        selected = set()
+        selected: set[str] = set()
         for search in checker['searchPaths'] if checker['discoveryArgs'] else []:
             try:
                 mode = os.stat(search).st_mode
@@ -105,17 +186,21 @@ def report(config):
         for path in selected & tracked:
             rows[path]['lint'].append({'name': checker['name'], 'kind': checker['kind']})
     if config['debian']:
-        selected = json.loads(
-            command(
-                [config['debian']['command'], 'coverage'],
-                env=os.environ | {'REPOCHK_EXCLUDES_JSON': json.dumps(config['debian']['excludes'])},
-            )
+        debian_paths = cast(
+            list[str],
+            json.loads(
+                command(
+                    [config['debian']['command'], 'coverage'],
+                    env=os.environ | {'REPOCHK_EXCLUDES_JSON': json.dumps(config['debian']['excludes'])},
+                )
+            ),
         )
-        for path in set(selected) & tracked:
+        for path in set(debian_paths) & tracked:
             rows[path]['lint'].append({'name': 'debian', 'kind': 'semantic'})
     for name, declaration in config['declarations'].items():
         for path in scope(declaration) & tracked:
-            rows[path]['project_checks'].append({'name': name, **declaration, 'scope': 'declared'})
+            check: ProjectCheck = {'name': name, **declaration, 'scope': 'declared'}
+            rows[path]['project_checks'].append(check)
     for exception in config['exceptions']:
         for path in scope(exception) & tracked:
             rows[path]['exceptions'].append({'reason': exception['reason'], 'stages': exception['stages']})
@@ -156,7 +241,13 @@ def report(config):
     }
 
 
-def main():
+class Arguments(argparse.Namespace):
+    config: str = ''
+    json: bool = False
+    check: bool = False
+
+
+def main() -> int:
     if sys.argv[1] == '--record':
         with tempfile.NamedTemporaryFile(
             mode='w', suffix='.json', dir=os.environ['NIX_TOOLS_COVERAGE_RECORDS'], delete=False
@@ -164,13 +255,13 @@ def main():
             json.dump([sys.argv[2], sys.argv[3:]], output)
         return 0
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('config')
-    parser.add_argument('--json', action='store_true', help='emit the complete machine-readable audit')
-    parser.add_argument(
+    _ = parser.add_argument('config')
+    _ = parser.add_argument('--json', action='store_true', help='emit the complete machine-readable audit')
+    _ = parser.add_argument(
         '--check', action='store_true', help='fail on gaps, untracked files, or unmapped project checks'
     )
-    args = parser.parse_args()
-    result = report(json.loads(pathlib.Path(args.config).read_text()))
+    args = parser.parse_args(namespace=Arguments())
+    result = report(cast(Config, json.loads(pathlib.Path(args.config).read_text())))
     if args.json:
         print(json.dumps(result, indent=2))
     else:

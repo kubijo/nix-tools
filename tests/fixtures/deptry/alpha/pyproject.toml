@@ -1,0 +1,28 @@
+[project]
+name = "alpha"
+version = "0.1.0"
+dependencies = ["fixture-runtime", "fixture-protobuf", "fixture-cli"]
+
+[project.optional-dependencies]
+tooling = ["fixture-optional-dev"]
+
+[dependency-groups]
+dev = ["fixture-dev"]
+server = ["fixture-server"]
+
+[tool.deptry]
+experimental_namespace_package = true
+known_first_party = ["provided_by_host"]
+optional_dependencies_dev_groups = ["tooling"]
+non_dev_dependency_groups = ["server"]
+
+[tool.deptry.package_module_name_map]
+fixture-runtime = "wire"
+fixture-protobuf = "google"
+fixture-cli = "fixture_cli"
+fixture-dev = "fixture_dev"
+fixture-optional-dev = "fixture_optional_dev"
+fixture-server = "fixture_server"
+
+[tool.deptry.per_rule_ignores]
+DEP002 = ["fixture-cli"]

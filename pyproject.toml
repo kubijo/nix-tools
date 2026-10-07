@@ -15,7 +15,7 @@ dev = [
     "coverage>=7.10.0",
     "editorconfig>=0.17.1",
     "jinja2>=3.1.6",
-    "ty>=0.0.84",
+    "types-pyyaml>=6.0.12",
 ]
 
 [tool.uv]
@@ -28,13 +28,21 @@ target-version = "py314"
 [tool.ruff.format]
 quote-style = "single"
 
-[tool.ty.environment]
-extra-paths = ["lib/outdated"]
+[tool.deptry]
+known_first_party = ["terminal_env"]
 
-[tool.ty.src]
-include = [
-    "lib/outdated",
-    "tests/outdated_test.py",
-    "tests/outdated_native_test.py",
-    "tests/python_project_test.py",
-]
+[tool.deptry.package_module_name_map]
+pyyaml = "yaml"
+
+[tool.basedpyright]
+typeCheckingMode = "all"
+failOnWarnings = true
+enableTypeIgnoreComments = false
+pythonVersion = "3.14"
+pythonPlatform = "All"
+include = ["lib", "tests"]
+# Fixtures contain deliberate syntax, import, and dependency errors.
+exclude = ["tests/fixtures"]
+extraPaths = ["lib", "lib/outdated"]
+# Stubs for tools with separate Nix runtimes.
+stubPath = "tests/typing_stubs"
