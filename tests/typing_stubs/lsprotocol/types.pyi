@@ -1,0 +1,2 @@
+class Diagnostic:
+    data: object

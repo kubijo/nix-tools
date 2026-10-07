@@ -6,16 +6,27 @@ import pathlib
 import re
 import shlex
 import tempfile
+from collections.abc import Mapping
+from typing import TypedDict, cast
 
 from common import Failure, UnreadableSource, run, version
 
 
-def lookup(exe, settings, timeout):
+class ReleaseSource(TypedDict, total=False):
+    provider: str
+    repo: str
+    url: str
+    project: str
+    tags: bool
+    tagPattern: str
+
+
+def lookup(exe: str, settings: Mapping[str, str | bool], timeout: float) -> str:
     # No oldver/newver: every invocation queries upstream and writes no result cache.
     with tempfile.TemporaryDirectory(prefix='nix-tools-release-') as temporary:
         config = pathlib.Path(temporary) / 'source.toml'
         config.touch(mode=0o600)
-        config.write_text(
+        _ = config.write_text(
             f'[__config__]\nhttp_timeout = {int(timeout)}\n[entry]\n'
             + ''.join(f'{key} = {json.dumps(value, ensure_ascii=False)}\n' for key, value in settings.items())
         )
@@ -23,11 +34,12 @@ def lookup(exe, settings, timeout):
         # We classify those below; any process-level failure is still fatal.
         output, _ = run([exe, '-c', str(config), '--logger=json'], temporary, timeout)
     try:
-        events = [json.loads(line) for line in output.splitlines()]
+        values = [cast(object, json.loads(line)) for line in output.splitlines()]
     except ValueError:
         raise Failure('nvchecker returned invalid JSON') from None
-    if not events or not all(isinstance(event, dict) for event in events):
+    if not values or not all(isinstance(event, dict) for event in values):
         raise Failure('nvchecker returned an invalid report')
+    events = cast(list[dict[str, object]], values)
     # An HTTP/authentication/command error can accompany a no-result event.
     # Never turn that error into a harmless skip or disclose raw native diagnostics.
     if any(event.get('level') == 'error' and event.get('event') != 'no-result' for event in events):
@@ -44,12 +56,12 @@ def lookup(exe, settings, timeout):
     return latest
 
 
-def source(exe, item, timeout):
+def source(exe: str, item: ReleaseSource, timeout: float) -> tuple[str, str]:
     kind = item.get('provider', 'github')
-    settings = {}
+    settings: dict[str, str | bool] = {}
     pattern = item.get('tagPattern')
     if kind == 'github':
-        repo = item['repo']
+        repo = item.get('repo', '')
         if not re.fullmatch(r'[\w.-]+/[\w.-]+', repo):
             raise Failure('Expected an owner/repository GitHub identifier')
         settings = {'source': 'github', 'github': repo}
@@ -64,9 +76,13 @@ def source(exe, item, timeout):
     elif kind == 'git':
         # nvchecker's git provider invokes a shell command. Quote the URL as one
         # argument and terminate options; never interpolate an unquoted source.
+        if 'url' not in item:
+            raise Failure('Git release source requires a URL')
         settings = {'source': 'git', 'git': '-- ' + shlex.quote(item['url'])}
     elif kind in ('npm', 'pypi', 'crates'):
         native = 'cratesio' if kind == 'crates' else kind
+        if 'project' not in item:
+            raise Failure('Registry release source requires a project')
         settings = {'source': native, native: item['project']}
     else:
         raise Failure('Unsupported release provider')

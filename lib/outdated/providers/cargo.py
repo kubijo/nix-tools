@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 
 from common import Result, command_json, external, records, relative, snapshot
 
@@ -9,8 +10,8 @@ from .contract import ProviderConfig
 
 
 def report(config: ProviderConfig, root: Path, timeout: float) -> Iterator[Result]:
-    relative(root, 'Cargo.toml')
-    relative(root, 'Cargo.lock')
+    _ = relative(root, 'Cargo.toml')
+    _ = relative(root, 'Cargo.lock')
     with snapshot(root) as work:
         inventory = command_json(
             [config['cargo'], 'metadata', '--locked', '--format-version=1', '--all-features'],
@@ -18,10 +19,11 @@ def report(config: ProviderConfig, root: Path, timeout: float) -> Iterator[Resul
             timeout,
         )
         data = command_json([config['exe'], 'outdated', '--format=json', '--workspace', '--exit-code=0'], work, timeout)
-    documents = data if isinstance(data, list) else [data]
+    documents = cast(list[object], data) if isinstance(data, list) else [data]
     count = 0
     for document in documents:
-        for item in records(document, 'dependencies'):
+        for record in records(document, 'dependencies'):
+            item = cast(dict[str, str], record)
             count += 1
             current, latest = item['project'], item['latest']
             name = item['name'] + (f' ({item["platform"]})' if item.get('platform') else '')
@@ -41,11 +43,12 @@ def report(config: ProviderConfig, root: Path, timeout: float) -> Iterator[Resul
                     latest,
                     'Cargo requirement-compatible candidate is separate from latest upstream',
                 )
-    for package in records(inventory, 'packages'):
+    for record in records(inventory, 'packages'):
+        package = cast(dict[str, str | None], record)
         if (package.get('source') or '').startswith('git+'):
             yield external(
                 'cargo',
-                package['name'],
+                cast(str, package['name']),
                 'Cargo.lock',
                 package['version'],
                 'Git dependency; configure a release entry to track upstream releases',

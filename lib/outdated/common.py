@@ -9,6 +9,8 @@ import shutil
 import signal
 import subprocess
 import tempfile
+from collections.abc import Generator, Mapping, Sequence
+from typing import cast
 
 from packaging.version import InvalidVersion, Version
 
@@ -37,7 +39,7 @@ class Result:
     current_url: str = dataclasses.field(default='', repr=False, compare=False)
     detail_identifiers: tuple[str, ...] = dataclasses.field(default=(), repr=False, compare=False)
 
-    def json(self):
+    def json(self) -> dict[str, str]:
         return {
             'provider': self.provider,
             'name': self.name,
@@ -50,14 +52,16 @@ class Result:
         }
 
 
-def version(value):
+def version(value: str) -> Version | None:
     try:
         return Version(value)
     except InvalidVersion:
         return None
 
 
-def compare(provider, name, source, current, latest, compatible='', detail=''):
+def compare(
+    provider: str, name: str, source: str, current: object, latest: object, compatible: object = '', detail: str = ''
+) -> Result:
     current, latest = str(current), str(latest)
     if not current or not latest:
         raise Failure('Version lookup returned an empty version')
@@ -80,7 +84,7 @@ def compare(provider, name, source, current, latest, compatible='', detail=''):
     return Result(provider, name, source, state, current, str(compatible or ''), latest, detail)
 
 
-def summary(results):
+def summary(results: Sequence[Result]) -> tuple[str, int]:
     if not results or any(row.state in {'error', 'unknown', 'blocked'} for row in results):
         return 'ERROR', 2
 
@@ -90,7 +94,7 @@ def summary(results):
     return 'UP-TO-DATE', 0
 
 
-def relative(root, value, *, directory=False):
+def relative(root: pathlib.Path, value: str, *, directory: bool = False) -> pathlib.Path:
     path = pathlib.Path(value)
 
     if path.is_absolute() or '..' in path.parts:
@@ -107,7 +111,7 @@ def relative(root, value, *, directory=False):
     return target
 
 
-def environment():
+def environment() -> dict[str, str]:
     return os.environ | {
         'NO_COLOR': '1',
         'FORCE_COLOR': '0',
@@ -126,11 +130,18 @@ def environment():
     }
 
 
-def run(command, root, timeout, *, codes=(0,), env=None):
+def run(
+    command: Sequence[str],
+    root: str | pathlib.Path,
+    timeout: float,
+    *,
+    codes: Sequence[int] = (0,),
+    env: Mapping[str, str] | None = None,
+) -> tuple[str, str]:
     with subprocess.Popen(
         command,
         cwd=root,
-        env=environment() | (env or {}),
+        env={**environment(), **(env or {})},
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -140,7 +151,7 @@ def run(command, root, timeout, *, codes=(0,), env=None):
             stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGKILL)
-            process.communicate()
+            _ = process.communicate()
             raise Failure('Provider command timed out') from None
 
     if process.returncode not in codes:
@@ -151,24 +162,31 @@ def run(command, root, timeout, *, codes=(0,), env=None):
     return stdout.decode('utf-8'), stderr.decode('utf-8')
 
 
-def command_json(command, root, timeout, **kwargs):
-    output, _ = run(command, root, timeout, **kwargs)
+def command_json(
+    command: Sequence[str],
+    root: str | pathlib.Path,
+    timeout: float,
+    *,
+    codes: Sequence[int] = (0,),
+    env: Mapping[str, str] | None = None,
+) -> object:
+    output, _ = run(command, root, timeout, codes=codes, env=env)
 
     try:
-        return json.loads(output)
+        return cast(object, json.loads(output))
     except ValueError, TypeError:
         raise Failure('Provider returned malformed JSON') from None
 
 
 @contextlib.contextmanager
-def snapshot(root):
+def snapshot(root: pathlib.Path) -> Generator[pathlib.Path]:
     # Native package managers may refresh metadata in the project even in report
     # mode. Give them a copy and never a writable link back to the consumer.
     ignored = {'.git', '.venv', 'node_modules', 'target', '.tmp', '__pycache__', 'result'}
     with tempfile.TemporaryDirectory(prefix='nix-tools-outdated-') as directory:
         target = pathlib.Path(directory) / 'project'
 
-        def ignore(path, names):
+        def ignore(path: str, names: list[str]) -> set[str]:
             skipped = {name for name in names if name in ignored or name.startswith('result-')}
             for name in set(names) - skipped:
                 file = pathlib.Path(path) / name
@@ -180,14 +198,16 @@ def snapshot(root):
                         raise Failure('Project contains a directory symlink cycle')
             return skipped
 
-        shutil.copytree(root, target, symlinks=False, ignore=ignore)
+        _ = shutil.copytree(root, target, symlinks=False, ignore=ignore)
         yield target
 
 
-def validate_adapter(document, provider, source):
+def validate_adapter(document: object, provider: str, source: str) -> list[Result]:
+    if not isinstance(document, dict):
+        raise Failure('Adapter must return schemaVersion=1 and a results array')
+    document = cast(dict[str, object], document)
     if (
-        not isinstance(document, dict)
-        or type(document.get('schemaVersion')) is not int
+        type(document.get('schemaVersion')) is not int
         or document.get('schemaVersion') != 1
         or not isinstance(document.get('results'), list)
     ):
@@ -195,11 +215,14 @@ def validate_adapter(document, provider, source):
     if not document['results']:
         raise Failure('Adapter returned an empty report')
 
-    output = []
+    output: list[Result] = []
     fields = {'name', 'state', 'current', 'compatible', 'latest', 'detail'}
 
-    for item in document['results']:
-        if not isinstance(item, dict) or item.keys() - fields:
+    for value in cast(list[object], document['results']):
+        if not isinstance(value, dict):
+            raise Failure('Adapter returned unsupported result fields')
+        item = cast(dict[str, object], value)
+        if item.keys() - fields:
             raise Failure('Adapter returned unsupported result fields')
         if (
             not all(isinstance(v, str) for v in item.values())
@@ -207,17 +230,29 @@ def validate_adapter(document, provider, source):
             or item.get('state') not in STATES
         ):
             raise Failure('Adapter returned an invalid result')
-        output.append(Result(provider, source=source, **item))
+        strings = cast(dict[str, str], item)
+        output.append(
+            Result(
+                provider,
+                strings['name'],
+                source,
+                strings['state'],
+                strings.get('current', ''),
+                strings.get('compatible', ''),
+                strings.get('latest', ''),
+                strings.get('detail', ''),
+            )
+        )
 
     return output
 
 
-def external(provider, name, source, current, detail):
+def external(provider: str, name: str, source: str, current: object, detail: str) -> Result:
     return Result(provider, name, source, 'unknown', str(current), detail=detail)
 
 
-def records(value, key=None):
-    result = value[key] if key else value
-    if not isinstance(result, list) or not all(isinstance(item, dict) for item in result):
+def records(value: object, key: str | None = None) -> list[dict[str, object]]:
+    result = cast(dict[str, object], value)[key] if key else value
+    if not isinstance(result, list) or not all(isinstance(item, dict) for item in cast(list[object], result)):
         raise Failure('Unexpected native result schema')
-    return result
+    return cast(list[dict[str, object]], result)

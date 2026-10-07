@@ -8,6 +8,22 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in `lint.deptry.projects` and `lint.basedpyright.projects` for independent Python project checks, with pinned
+  tooling, consumer configuration, coverage and outdated metadata.
+- Optional basedpyright `reporter = "rich"` with relative file locations, terminal hyperlinks and plain-text fallback.
+
+### Changed
+
+- This repository uses basedpyright's `all` mode for Python helpers and tests, and deptry for outdated reporting.
+- `just validate` runs local checks in one development shell before flake builds, reducing Nix overhead and output.
+- Refreshed nixpkgs and Python build tooling; matched the Biome schema to its pin.
+
+### Fixed
+
+- Failed checker output retains terminal colors and respects `NO_COLOR`.
+
 ## [0.7.2] - 2026-10-03
 
 ### Added

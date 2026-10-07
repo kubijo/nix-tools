@@ -10,7 +10,7 @@ import tempfile
 import editorconfig
 
 
-def main():
+def main() -> int:
     tool, mode, policy, *arguments = sys.argv[1:]
     if mode not in ('check', 'fix'):
         raise ValueError('whitespace mode must be check or fix')
@@ -29,25 +29,25 @@ def main():
         selection = root / 'selection'
         selection.mkdir()
         # Force the policy boundary even if the supplied file omits root=true.
-        (selection / '.editorconfig').write_text(
+        _ = (selection / '.editorconfig').write_text(
             'root = true\n' + re.sub(r'(?mi)^[ \t]*root\s*=.*$', '', pathlib.Path(policy).read_text()), encoding='utf-8'
         )
         work = root / 'work'
         work.mkdir()
-        (work / 'checker.json').write_text('{}', encoding='utf-8')
+        _ = (work / 'checker.json').write_text('{}', encoding='utf-8')
         for filename in files:
             source = pathlib.Path(filename)
             relative = source.absolute().relative_to(pathlib.Path.cwd())
             if '..' in relative.parts or source.is_symlink():
                 raise ValueError(f'unsafe whitespace input: {filename}')
             properties = editorconfig.get_properties(str(selection / relative))
-            (work / '.editorconfig').write_text(
+            _ = (work / '.editorconfig').write_text(
                 'root = true\n[*]\n' + ''.join(f'{key} = {value}\n' for key, value in properties.items()),
                 encoding='utf-8',
             )
             target = work / 'content'
             original = source.read_bytes()
-            target.write_bytes(original)
+            _ = target.write_bytes(original)
             result = subprocess.run(
                 [
                     tool,
@@ -71,7 +71,7 @@ def main():
             if result.returncode:
                 status = 1
             elif mode == 'fix' and target.read_bytes() != original:
-                source.write_bytes(target.read_bytes())
+                _ = source.write_bytes(target.read_bytes())
     return status
 
 

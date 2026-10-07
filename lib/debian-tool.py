@@ -7,17 +7,27 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import TypedDict, Unpack, cast
 
 
-def run(arguments):
-    from debputy.commands.debputy_cmd.__main__ import main as debputy_main
-    from debputy.linting.lint_util import LintReport
-    from debputy.lsp.lsp_features import (
+def run(arguments: list[str]) -> None:
+    # Local stubs describe imports supplied by the pinned adapter runtime.
+    from debputy.commands.debputy_cmd.__main__ import main as debputy_main  # pyright: ignore[reportMissingModuleSource]
+    from debputy.linting.lint_util import (  # pyright: ignore[reportMissingModuleSource]
+        LintDiagnosticResultState,
+        LintReport,
+    )
+    from debputy.lsp.lsp_features import (  # pyright: ignore[reportMissingModuleSource]
         CLI_DIAGNOSTIC_HANDLERS,
         CLI_FORMAT_FILE_HANDLERS,
         ensure_cli_lsp_features_are_loaded,
     )
-    from pathspec import GitIgnoreSpec
+    from lsprotocol.types import Diagnostic  # pyright: ignore[reportMissingModuleSource]
+    from pathspec import GitIgnoreSpec  # pyright: ignore[reportMissingModuleSource]
+
+    class ReportOptions(TypedDict, total=False):
+        result_state: LintDiagnosticResultState
+        in_file: str | None
 
     if not arguments or arguments[0] not in {'lint', 'reformat', 'coverage'}:
         raise ValueError('expected lint, reformat, or coverage')
@@ -45,7 +55,7 @@ def run(arguments):
         if files is not None:
             raise ValueError('lint is project-scoped and accepts no file arguments')
         command = ['@fd@', '--hidden', '--no-require-git', '--show-errors', '--type', 'file', '--print0']
-        exclusions = json.loads(os.environ.get('REPOCHK_EXCLUDES_JSON', '[]'))
+        exclusions = cast(list[str], json.loads(os.environ.get('REPOCHK_EXCLUDES_JSON', '[]')))
         for pattern in exclusions:
             command.append(f'--exclude={pattern}')
         command.extend(['.', '.'])
@@ -65,10 +75,10 @@ def run(arguments):
         ignored = GitIgnoreSpec.from_lines(exclusions)
         report = LintReport.report_diagnostic
 
-        def report_selected(self, diagnostic, **kwargs):
+        def report_selected(self: LintReport, diagnostic: Diagnostic, **kwargs: Unpack[ReportOptions]) -> None:
             data = diagnostic.data
-            related = data.get('report_for_related_file') if isinstance(data, dict) else None
-            if related and ignored.match_file(related):
+            related = cast(dict[str, object], data).get('report_for_related_file') if isinstance(data, dict) else None
+            if isinstance(related, str) and related and ignored.match_file(related):
                 return
             report(self, diagnostic, **kwargs)
 
@@ -77,7 +87,7 @@ def run(arguments):
         if files is None:
             raise ValueError('reformat requires -- followed by selected files')
         root = Path.cwd().resolve()
-        selected = set()
+        selected: set[str] = set()
         for filename in files:
             path = Path(filename)
             if path.is_symlink() or not path.is_file():
@@ -88,11 +98,11 @@ def run(arguments):
             selected.add(relative)
         # Upstream declines malformed deb822 without a failing exit status. Reject
         # it before any writes, including duplicate fields and malformed stanzas.
-        from debian._deb822_repro import parse_deb822_file
+        from debian._deb822_repro import parse_deb822_file  # pyright: ignore[reportMissingModuleSource]
 
         for filename in selected:
             with open(filename, encoding='utf-8') as source:
-                parse_deb822_file(source)
+                _ = parse_deb822_file(source)
             if os.path.lexists(filename + '.tmp'):
                 raise ValueError(f'refusing to overwrite existing formatter temporary file: {filename}.tmp')
     if not selected:
@@ -108,12 +118,12 @@ def run(arguments):
         if config is not None:
             target = Path(directory) / 'debputy' / 'debputy-config.yaml'
             target.parent.mkdir()
-            shutil.copyfile(config, target)
+            _ = shutil.copyfile(config, target)
         sys.argv = ['debputy', *arguments]
         debputy_main()
 
 
-def main():
+def main() -> None:
     try:
         run(sys.argv[1:])
     except (ValueError, IndexError, OSError, subprocess.CalledProcessError) as error:

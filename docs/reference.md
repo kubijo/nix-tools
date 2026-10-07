@@ -72,26 +72,28 @@ second node.
 
 ## repochk
 
-| Toggle       | Tool                          | Globs                                    | Default |
-| ------------ | ----------------------------- | ---------------------------------------- | ------- |
-| `nix`        | [`statix`] + [`deadnix`]      | `*.nix`                                  | ✅ on   |
-| `shell`      | [`shellcheck`]                | `*.sh` `*.bash` `.envrc`                 | ✅ on   |
-| `yaml`       | [`yamllint`]                  | `*.yaml` `*.yml`                         | ✅ on   |
-| `workflows`  | [`actionlint`]                | `.github/workflows` `.forgejo/workflows` | ✅ on   |
-| `python`     | [`ruff check`][`ruff`]        | `*.py` `*.pyi`                           | ❌ off  |
-| `php`        | [`Mago`]                      | `*.php` `*.inc`                          | ❌ off  |
-| `debian`     | [`debputy`]                   | project-scoped Debian metadata¹          | ❌ off  |
-| `salt`       | [`salt-lint`]                 | `*.sls` `*.j2` `*.jinja`                 | ❌ off  |
-| `whitespace` | [`editorconfig-checker`]      | `*.sls` `*.j2` `*.jinja`                 | ❌ off  |
-| `javascript` | [`biome lint`][`biome`]       | `*.js` `*.mjs` `*.cjs` `*.jsx`           | ❌ off  |
-| `typescript` | [`biome lint`][`biome`]       | `*.ts` `*.mts` `*.cts` `*.tsx`           | ❌ off  |
-| `links`      | [`lychee`]                    | `*.md` `*.markdown`                      | ❌ off  |
-| `protobuf`   | [`buf lint`][`buf`]           | `*.proto`                                | ❌ off  |
-| `sql`        | [`sqlfluff lint`][`sqlfluff`] | `*.sql`                                  | ❌ off  |
-| `po`         | [`msgfmt`]                    | `*.po`                                   | ❌ off  |
-| `xml`        | [`xmllint`]                   | `*.xml` `*.gpx`                          | ❌ off  |
+| Toggle         | Tool                                           | Globs                                    | Default |
+| -------------- | ---------------------------------------------- | ---------------------------------------- | ------- |
+| `nix`          | [`statix`] + [`deadnix`]                       | `*.nix`                                  | ✅ on   |
+| `shell`        | [`shellcheck`]                                 | `*.sh` `*.bash` `.envrc`                 | ✅ on   |
+| `yaml`         | [`yamllint`]                                   | `*.yaml` `*.yml`                         | ✅ on   |
+| `workflows`    | [`actionlint`]                                 | `.github/workflows` `.forgejo/workflows` | ✅ on   |
+| `python`       | [`ruff check`][`ruff`]                         | `*.py` `*.pyi`                           | ❌ off  |
+| `deptry`       | [deptry](https://deptry.com/)                  | named Python projects                    | ❌ off  |
+| `basedpyright` | [basedpyright](https://docs.basedpyright.com/) | configured Python projects               | ❌ off  |
+| `php`          | [`Mago`]                                       | `*.php` `*.inc`                          | ❌ off  |
+| `debian`       | [`debputy`]                                    | project-scoped Debian metadata¹          | ❌ off  |
+| `salt`         | [`salt-lint`]                                  | `*.sls` `*.j2` `*.jinja`                 | ❌ off  |
+| `whitespace`   | [`editorconfig-checker`]                       | `*.sls` `*.j2` `*.jinja`                 | ❌ off  |
+| `javascript`   | [`biome lint`][`biome`]                        | `*.js` `*.mjs` `*.cjs` `*.jsx`           | ❌ off  |
+| `typescript`   | [`biome lint`][`biome`]                        | `*.ts` `*.mts` `*.cts` `*.tsx`           | ❌ off  |
+| `links`        | [`lychee`]                                     | `*.md` `*.markdown`                      | ❌ off  |
+| `protobuf`     | [`buf lint`][`buf`]                            | `*.proto`                                | ❌ off  |
+| `sql`          | [`sqlfluff lint`][`sqlfluff`]                  | `*.sql`                                  | ❌ off  |
+| `po`           | [`msgfmt`]                                     | `*.po`                                   | ❌ off  |
+| `xml`          | [`xmllint`]                                    | `*.xml` `*.gpx`                          | ❌ off  |
 
-Each shares the tool and config its formatter counterpart uses, so `ruff check` and `ruff format` cannot disagree about
+Tools with a formatter counterpart share its tool and config, so `ruff check` and `ruff format` cannot disagree about
 line length. `sql` requires `configFile`, since SQLFluff cannot safely guess a dialect. `links` resolves on-disk targets
 only — an unreachable host never fails it — and takes patterns matched against the link rather than the file holding it:
 
@@ -118,6 +120,67 @@ discovery in both lint and coverage; they are not treated as missing directories
 
 Like repofmt, repochk searches upward for the top-level `treeRootFile` before scanning, so subdirectory runs cover the
 same repository.
+
+## Python dependency checks
+
+For a root-level `pyproject.toml`:
+
+```nix
+lint.deptry.projects.app = { };
+```
+
+For separate projects:
+
+```nix
+lint.deptry.projects = {
+  api = { root = "services/api"; sourceRoots = [ "src" "scripts" ]; };
+  worker = { root = "services/worker"; sourceRoots = [ "." "src" ]; };
+};
+```
+
+Each project runs once in lint, validate and the linting flake check. Paths:
+
+- `root`: working directory, relative to the repository root; default `"."`.
+- `sourceRoots`: scan and import roots, relative to `root`; default `[ "." ]`.
+- `configFile`: manifest, relative to `root`; default `"pyproject.toml"`. Nix paths use the store without changing
+  `root`.
+
+Roots must exist within their parent scope. Missing or invalid paths, manifests and tool errors fail the check.
+Overlapping roots scan once but retain all import roots. Nested manifests do not stop a parent's scan.
+
+[Native configuration](https://deptry.com/usage/) owns dependency groups, module mappings, namespaces, rules and
+exclusions. Generic file exclusions do not apply; no generated-code exclusions are added. For CLI-only dependencies, use
+`[tool.deptry.per_rule_ignores]`, e.g. `DEP002 = ["my-cli-package"]`.
+
+Checks run offline without installing dependencies or using a developer's virtualenv. The isolated executable's package
+metadata may be incomplete: `package_module_name_map` supplies import mappings; transitive checks need a pinned
+`package`/`exe` containing the project's dependencies.
+
+Other options: `enable`, project-level `package`, `exe` (takes precedence), `extraOptions` and `outdated`. The
+`--config` and `--known-first-party` flags are reserved; use `configFile` and the manifest instead. Declare
+[coverage](#coverage-audit) as `lint:deptry-<name>` and [releases](outdated.md#release-entries) via `outdated` or
+`outdated.releases.deptry`.
+
+## Python type checks
+
+Provide a repository-relative config path and Nix Python environment:
+
+```nix
+lint.basedpyright.projects.api = {
+  configFile = "services/api/pyproject.toml";
+  python = pkgs.python314.withPackages (ps: [ ps.requests ]);
+};
+```
+
+The file must contain a nonempty `[tool.basedpyright]` table controlling strictness, sources, exclusions and imports.
+Its directory becomes the working directory. Each project runs once in lint, validate and the linting flake check,
+without installing dependencies. Missing config or Python executables fail; generic file exclusions do not apply.
+
+The tool is pinned; optional fields are `package`, `exe` (takes precedence), `outdated` and `reporter`. Declare coverage
+as `lint:basedpyright-<name>`.
+
+`reporter = "rich"` adds relative locations and terminal hyperlinks using a separate pinned runtime. Pipes and agents
+get plain text unless color is forced. The default is `"native"`.
 
 ## PHP and Debian packaging
 
@@ -445,8 +508,8 @@ actionlint. nixfmt, shfmt, mdformat, just, msgcat, msgfmt, xmllint and oxipng ta
 dropping the setting. `caddy fmt` is the odd one out: its `--config` names the file to format, not a style, so wiring it
 would format the wrong file.
 
-A config is staged into the store under its own basename, since ruff picks its parser from that and would read a
-`<hash>-pyproject.toml` as a flat `ruff.toml`. One consequence the library cannot paper over: ruff resolves `src`
+File-tool configs are staged into the store under their own basename, since ruff picks its parser from that and would
+read a `<hash>-pyproject.toml` as a flat `ruff.toml`. One consequence the library cannot paper over: ruff resolves `src`
 relative to the config's own directory, so a repo passing its own ruff config needs
 `[tool.ruff.lint.isort] known-first-party = [...]` or first-party detection silently stops working.
 

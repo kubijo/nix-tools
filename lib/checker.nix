@@ -38,6 +38,8 @@ in
 
   # Language-specific, so off by default like their formatters.
   python ? false,
+  deptry ? false,
+  basedpyright ? false,
   php ? false,
   debian ? false,
   whitespace ? false,
@@ -133,6 +135,8 @@ let
         inherit (debianOptions) exclude;
       };
     }
+    // (import ./deptry.nix { inherit lib toolPkgs; } deptry)
+    // (import ./basedpyright.nix { inherit lib toolPkgs; } basedpyright)
     // extraProjectCheckers;
 
   fileCheckers = lib.attrValues (import ./checkers.nix { inherit lib toolPkgs args; } // spliced);
@@ -252,19 +256,17 @@ assert lib.assertMsg (
 ) "a checker name cannot be both file-scoped and project-scoped: ${toString nameCollisions}";
 toolPkgs.writeShellApplication {
   inherit name;
-  passthru.outdatedEntries =
-    lib.mapAttrsToList
-      (
-        name: spec:
-        (import ./tool-records.nix { inherit lib toolPkgs; }).metadata "lint.${name}" spec.outdated
-      )
-      (
-        lib.filterAttrs (_: spec: (spec.outdated or null) != null) (extraCheckers // extraProjectCheckers)
-      );
+
+  passthru.outdatedEntries = lib.mapAttrsToList (
+    name: spec:
+    (import ./tool-records.nix { inherit lib toolPkgs; }).metadata "lint.${name}" spec.outdated
+  ) (lib.filterAttrs (_: spec: (spec.outdated or null) != null) (extraCheckers // projectSpecs));
+
   passthru.selection = {
     inherit excludes fileCheckers projectCheckers;
     files = map (checker: checker // { discoveryArgs = fdArgs checker; }) fileCheckers;
   };
+
   runtimeInputs = [
     toolPkgs.fd
     # PATH is nulled, so even `mkdir` has to be declared.
@@ -273,8 +275,10 @@ toolPkgs.writeShellApplication {
     toolPkgs.shellcheck
   ]
   ++ extraRuntimeInputs;
+
   runtimeEnv.PATH = null;
   excludeShellChecks = [ "SC2123" ];
+
   text = ''
     tree_root_file=${lib.escapeShellArg treeRootFile}
     root=$PWD
@@ -287,6 +291,14 @@ toolPkgs.writeShellApplication {
       [ -n "$root" ] || root=/
     done
     cd "$root"
+
+    # Preserve terminal colors through output capture.
+    if [[ -v NO_COLOR ]]; then
+      unset FORCE_COLOR CLICOLOR_FORCE
+    elif [[ -t 2 ]]; then
+      export FORCE_COLOR="''${FORCE_COLOR:-1}"
+      export CLICOLOR_FORCE="''${CLICOLOR_FORCE:-1}"
+    fi
 
     export XDG_CACHE_HOME="$PWD/${cacheDir}/cache"
     mkdir -p "$XDG_CACHE_HOME"

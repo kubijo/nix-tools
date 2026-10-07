@@ -2,11 +2,15 @@ import concurrent.futures
 import contextlib
 import json
 import os
-import pathlib
 import re
 import sys
 from collections import Counter
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
+from typing import NotRequired, TypedDict, cast
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import tyro
 from common import (
@@ -24,11 +28,12 @@ from network import Client
 from providers import PROVIDERS
 from rich import box
 from rich.console import Console
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TaskID, TextColumn, TimeElapsedColumn
 from rich.style import Style
 from rich.table import Table
 from rich.text import Text
-from sources import nix_jobs, release_entry, workflow_jobs
+from sources import ReleaseEntry, nix_jobs, release_entry, workflow_jobs
+from terminal_env import is_clanker, is_color_forced
 
 STATE_STYLES = {
     'error': 'bold red',
@@ -41,10 +46,35 @@ STATE_STYLES = {
     'skipped': 'bright_black',
 }
 IDENTIFIER_STYLE = Style(color='bright_white', bgcolor='grey30', bold=True)
-AGENT_ENVS = ('CLAUDECODE', 'CURSOR_AGENT', 'GEMINI_CLI', 'CODEX_THREAD_ID', 'OPENCODE', 'IN_CLANKER', 'in-clanker')
+type Callback = Callable[[], object]
+type Job = tuple[str, str, str, Callback]
 
 
-def clean(value):
+class Adapter(TypedDict):
+    name: str
+    exe: str
+    args: list[str]
+    root: NotRequired[str]
+    timeout: NotRequired[float]
+
+
+class Inventory(TypedDict):
+    providers: Mapping[str, Mapping[str, str]]
+    tools: list[ReleaseEntry]
+    releases: list[ReleaseEntry]
+    adapters: list[Adapter]
+    skips: NotRequired[list[ReleaseEntry]]
+    concurrency: NotRequired[int]
+
+
+class Config(Inventory):
+    treeRootFile: str
+    timeout: float
+    githubApi: str
+    nvchecker: NotRequired[str]
+
+
+def clean(value: str) -> str:
     # Native metadata and adapter diagnostics are untrusted terminal text.
     value = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', value)
     value = ''.join(c if c in '\n\t' or ord(c) >= 32 else '?' for c in value)
@@ -58,16 +88,19 @@ def clean(value):
     return value
 
 
-def guarded(provider, name, source, callback):
-    rows = []
+def guarded(provider: str, name: str, source: str, callback: Callback) -> list[Result]:
+    rows: list[Result] = []
 
     try:
         value = callback()
-        for result in [value] if isinstance(value, Result) else value:
+        if not isinstance(value, (Result, Iterable)):
+            raise Failure('Provider returned an invalid result')
+        values = [value] if isinstance(value, Result) else value
+        for result in values:
             if (
                 not isinstance(result, Result)
                 or result.state not in STATES
-                or not all(isinstance(value, str) for value in result.json().values())
+                or not all(isinstance(value, str) for value in cast(dict[str, object], result.json()).values())
             ):
                 raise Failure('Provider returned an invalid result')
             rows.append(result)
@@ -86,11 +119,11 @@ def guarded(provider, name, source, callback):
     return rows
 
 
-def jobs(config, root, client):
+def jobs(config: Inventory, root: Path, client: Client) -> list[Job]:
     providers = config['providers']
-    output = []
+    output: list[Job] = []
 
-    def add(provider, name, source, callback):
+    def add(provider: str, name: str, source: str, callback: Callback) -> None:
         output.append((provider, name, source, callback))
 
     for provider, settings in providers.items():
@@ -102,12 +135,12 @@ def jobs(config, root, client):
                 for name, callback in factory(settings, directory, client):
                     add(provider, name, source, callback)
             else:
-                callback = PROVIDERS[provider]
+                package_provider = PROVIDERS[provider]
                 add(
                     provider,
                     provider,
                     source,
-                    lambda callback=callback, settings=settings, directory=directory: callback(
+                    lambda callback=package_provider, settings=settings, directory=directory: callback(
                         settings, directory, client.timeout
                     ),
                 )
@@ -140,11 +173,16 @@ def jobs(config, root, client):
         )
 
     for item in config.get('skips', []):
-        add('skips', item['name'], item['source'], lambda item=item: release_entry(client, item, 'skips'))
+        add(
+            'skips',
+            item['name'],
+            item.get('source', item['name']),
+            lambda item=item: release_entry(client, item, 'skips'),
+        )
 
     for adapter in config['adapters']:
 
-        def execute(adapter=adapter):
+        def execute(adapter: Adapter = adapter) -> list[Result]:
             directory = relative(root, adapter.get('root', '.'), directory=True)
             with snapshot(directory) as work:
                 document = command_json(
@@ -159,7 +197,7 @@ def jobs(config, root, client):
     return output
 
 
-def find_root(start, marker):
+def find_root(start: Path, marker: str) -> Path:
     current = start.resolve()
     while not (current / marker).exists():
         if current.parent == current:
@@ -169,7 +207,7 @@ def find_root(start, marker):
     return current
 
 
-def display_version(provider, value):
+def display_version(provider: str, value: str) -> str:
     if provider == 'nix' and re.fullmatch(r'[0-9a-f]{40,64}', value):
         return value[:10]
     if value.startswith('sha256:') and len(value) > 25:
@@ -177,7 +215,7 @@ def display_version(provider, value):
     return value
 
 
-def display_name(provider, name):
+def display_name(provider: str, name: str) -> str:
     if provider == 'nix':
         paths = name.split(', ')
         if len(paths) > 1:
@@ -186,10 +224,10 @@ def display_name(provider, name):
     return name
 
 
-def note_code(detail, used):
+def note_code(detail: str, used: set[str]) -> str:
     clause = re.split(r'[.;:]\s+', detail, maxsplit=1)[0]
-    words = re.findall(r'[a-z0-9]+', clause.lower())
-    selected = []
+    words = [match[0] for match in re.finditer(r'[a-z0-9]+', clause.lower())]
+    selected: list[str] = []
     for word in words[:4]:
         candidate = '-'.join([*selected, word])
         if len(candidate) > 24:
@@ -206,7 +244,7 @@ def note_code(detail, used):
     return code
 
 
-def styled_detail(detail, identifiers):
+def styled_detail(detail: str, identifiers: Iterable[str]) -> Text:
     rendered = Text(detail)
     for identifier in sorted(set(identifiers), key=len, reverse=True):
         pattern = rf'(?<![\w/.-]){re.escape(identifier)}(?![\w/.-])'
@@ -215,47 +253,50 @@ def styled_detail(detail, identifiers):
     return rendered
 
 
-def output_mode(no_color):
-    agent = any(os.environ.get(name) for name in AGENT_ENVS)
-    interactive = sys.stdout.isatty() and not agent and not os.environ.get('CI') and os.environ.get('TERM') != 'dumb'
+def output_mode(no_color: bool) -> tuple[bool, bool, bool]:
+    interactive = (
+        sys.stdout.isatty() and not is_clanker() and not os.environ.get('CI') and os.environ.get('TERM') != 'dumb'
+    )
     force_color = os.environ.get('FORCE_COLOR')
-    forced = force_color not in (None, '', '0')
+    forced = is_color_forced(('FORCE_COLOR',))
     styled = forced or (interactive and force_color != '0' and not no_color and 'NO_COLOR' not in os.environ)
     return interactive, styled, forced
 
 
-def version_parts(row):
+def version_parts(row: Result) -> tuple[str, str]:
     current = display_version(row.provider, row.current)
     latest = display_version(row.provider, row.latest) if row.latest and row.latest != row.current else ''
     return current, latest
 
 
-def version_label(row):
+def version_label(row: Result) -> str:
     current, latest = version_parts(row)
     return f'{current} → {latest}' if current and latest else latest or current
 
 
-def single_line(value):
+def single_line(value: str) -> str:
     return re.sub(r'\s+', ' ', value).strip()
 
 
-def version_cell(row, links):
+def version_cell(row: Result, links: bool) -> Text:
     current, latest = version_parts(row)
     rendered = Text()
     current_url = row.current_url or (row.version_url if not latest else '')
     if current:
         style = Style(color='cyan', underline=True, link=current_url) if links and current_url else None
-        rendered.append(current, style=style)
+        _ = rendered.append(current, style=style)
     if latest:
         if current:
-            rendered.append(' → ')
+            _ = rendered.append(' → ')
         style = Style(color='cyan', underline=True, link=row.version_url) if links and row.version_url else None
-        rendered.append(latest, style=style)
+        _ = rendered.append(latest, style=style)
     return rendered
 
 
-def finding_notes(results):
-    notes, identifiers, used = {}, {}, set()
+def finding_notes(results: Sequence[Result]) -> tuple[dict[str, str], dict[str, set[str]]]:
+    notes: dict[str, str] = {}
+    identifiers: dict[str, set[str]] = {}
+    used: set[str] = set()
     for row in results:
         if row.state == 'up-to-date' or not row.detail:
             continue
@@ -266,7 +307,7 @@ def finding_notes(results):
     return notes, identifiers
 
 
-def report(results, json_output, no_color=False):
+def report(results: Sequence[Result], json_output: bool, no_color: bool = False) -> int:
     for row in results:
         for field, value in row.json().items():
             setattr(row, field, clean(value))
@@ -305,7 +346,7 @@ def report(results, json_output, no_color=False):
             highlight=False,
             width=None if sys.stdout.isatty() else 120,
         )
-        groups = {}
+        groups: dict[str, list[Result]] = {}
         for row in results:
             groups.setdefault(row.provider, []).append(row)
         for provider, rows in groups.items():
@@ -333,8 +374,10 @@ def report(results, json_output, no_color=False):
                 note_table.add_row(Text(note_key), styled_detail(detail, identifiers.get(detail, ())))
             console.print(note_table)
         verdict = Text('OUTDATED: ', style='bold')
-        verdict.append(state, style={'ERROR': 'bold red', 'OUTDATED': 'bold yellow', 'UP-TO-DATE': 'bold green'}[state])
-        verdict.append(f' ({counts_label})', style='bold')
+        _ = verdict.append(
+            state, style={'ERROR': 'bold red', 'OUTDATED': 'bold yellow', 'UP-TO-DATE': 'bold green'}[state]
+        )
+        _ = verdict.append(f' ({counts_label})', style='bold')
         console.print()
         console.print(verdict)
         console.print()
@@ -342,7 +385,7 @@ def report(results, json_output, no_color=False):
     return code
 
 
-def progress_display(console):
+def progress_display(console: Console) -> Progress:
     return Progress(
         SpinnerColumn(),
         TextColumn('{task.description}'),
@@ -357,37 +400,39 @@ def progress_display(console):
     )
 
 
-def run_jobs(work, concurrency, progress=None, task=None):
+def run_jobs(
+    work: Sequence[Job], concurrency: int, progress: Progress | None = None, task: TaskID | None = None
+) -> list[Result]:
     with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures = {pool.submit(guarded, *job): index for index, job in enumerate(work)}
         batches: list[list[Result] | None] = [None] * len(work)
 
         for future in concurrent.futures.as_completed(futures):
             batches[futures[future]] = future.result()
-            if progress is not None:
+            if progress is not None and task is not None:
                 progress.advance(task)
     return [row for batch in batches if batch is not None for row in batch]
 
 
-def collect_jobs(config, root, client, console=None):
+def collect_jobs(config: Inventory, root: Path, client: Client, console: Console | None = None) -> list[Result]:
     progress = progress_display(console) if console is not None else None
     task = progress.add_task('Discovering inputs', total=None) if progress is not None else None
     with progress if progress is not None else contextlib.nullcontext():
         work = jobs(config, root, client)
         if not work:
             raise Failure('No providers or release entries are enabled')
-        if progress is not None:
+        if progress is not None and task is not None:
             progress.update(task, description='Checking dependencies', total=len(work), completed=0)
-        return run_jobs(work, config['concurrency'], progress, task)
+        return run_jobs(work, config.get('concurrency', 6), progress, task)
 
 
 @dataclass
 class Options:
     """Online maintenance reports; never used as cached Nix check results."""
 
-    config: pathlib.Path
+    config: Path
     """Nix-generated provider configuration."""
-    root: pathlib.Path | None = None
+    root: Path | None = None
     """Repository root; otherwise discover the configured marker upward."""
     json: bool = False
     """Emit the versioned JSON report."""
@@ -395,12 +440,12 @@ class Options:
     """Disable color in the Rich table."""
 
 
-def main():
-    options = tyro.cli(Options)
+def main() -> int:
+    options = cast(Callable[[type[Options]], Options], tyro.cli)(Options)
 
     try:
-        config = json.loads(options.config.read_text())
-        root = options.root.resolve() if options.root else find_root(pathlib.Path.cwd(), config['treeRootFile'])
+        config = cast(Config, json.loads(options.config.read_text()))
+        root = options.root.resolve() if options.root else find_root(Path.cwd(), config['treeRootFile'])
         client = Client(config['timeout'], config['githubApi'], config.get('nvchecker', 'nvchecker'), preflight=True)
         interactive, styled, forced = output_mode(options.no_color)
         live = interactive and styled and not options.json

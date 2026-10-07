@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 
 from common import Result, command_json, external, records, relative, snapshot
 
@@ -9,8 +10,8 @@ from .contract import ProviderConfig
 
 
 def report(config: ProviderConfig, root: Path, timeout: float) -> Iterator[Result]:
-    relative(root, 'composer.json')
-    relative(root, 'composer.lock')
+    _ = relative(root, 'composer.json')
+    _ = relative(root, 'composer.lock')
     with snapshot(root) as work:
         data = command_json(
             [
@@ -28,7 +29,8 @@ def report(config: ProviderConfig, root: Path, timeout: float) -> Iterator[Resul
         )
     packages = records(data, 'locked')
     states = {'up-to-date': 'up-to-date', 'semver-safe-update': 'outdated', 'update-possible': 'outdated'}
-    for item in packages:
+    for record in packages:
+        item = cast(dict[str, str], record)
         current = item['version']
         if current.startswith('dev-') or '-dev' in current:
             yield external(

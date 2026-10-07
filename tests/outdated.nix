@@ -7,6 +7,13 @@
   runtimePython,
 }:
 let
+  source = lib.fileset.toSource {
+    root = ../lib;
+    fileset = lib.fileset.unions [
+      ../lib/outdated
+      ../lib/terminal_env.py
+    ];
+  };
   inherit (builtins) deepSeq tryEval toJSON;
   project =
     outdated:
@@ -119,23 +126,8 @@ let
       };
     };
   };
-  typingSource = lib.fileset.toSource {
-    root = ../.;
-    fileset = lib.fileset.unions [
-      ../pyproject.toml
-      ../lib/outdated
-      ./outdated_test.py
-      ./outdated_native_test.py
-      ./python_project_test.py
-    ];
-  };
 in
 {
-  outdated-typing = toolPkgs.runCommandLocal "outdated-typing" { } ''
-    cd ${typingSource}
-    ${python}/bin/ty check --python ${python}/bin/python
-    touch "$out"
-  '';
   python-project =
     toolPkgs.runCommandLocal "python-project" { nativeBuildInputs = [ toolPkgs.uv ]; }
       ''
@@ -146,7 +138,7 @@ in
         cp ${../pyproject.toml} project/pyproject.toml
         cp ${../uv.lock} project/uv.lock
         cd project
-        uv lock --check --offline --python ${python}/bin/python
+        uv lock --quiet --check --offline --python ${python}/bin/python
         cmp uv.lock ${../uv.lock}
         ${python}/bin/python ${./python_project_test.py} ${../uv.lock} ${runtimePython}/bin/python
         touch "$out"
@@ -198,7 +190,7 @@ in
         export PYTHONDONTWRITEBYTECODE=1
         mkdir -p "$HOME"
         export PATH="${toolPkgs.python314}/bin:$PATH"
-        ${python}/bin/python ${./outdated_native_test.py} ${clients} ${./fixtures/outdated} ${../lib/outdated} -v
+        ${python}/bin/python ${./outdated_native_test.py} ${clients} ${./fixtures/outdated} ${source}/outdated -v
         touch "$out"
       '';
   outdated-behavior =
@@ -207,7 +199,7 @@ in
         mkdir "$out"
         export PYTHONDONTWRITEBYTECODE=1
         export COVERAGE_FILE="$TMPDIR/.coverage"
-        python -m coverage run --branch --source=${../lib/outdated} ${./outdated_test.py} ${../lib/outdated} -v
+        python -m coverage run --branch --source=${source}/outdated ${./outdated_test.py} ${source}/outdated -v
         python -m coverage report --show-missing > "$out/coverage.txt"
         cat "$out/coverage.txt"
         python -m coverage json -o "$out/coverage.json"

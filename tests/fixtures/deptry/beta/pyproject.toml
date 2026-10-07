@@ -1,0 +1,7 @@
+[project]
+name = "beta"
+version = "0.1.0"
+dependencies = ["fixture-other"]
+
+[tool.deptry.package_module_name_map]
+fixture-other = "wire"

@@ -116,6 +116,26 @@ rec {
     lib.listToAttrs (lib.concatMap fmtCheck fmtNames)
     // lib.listToAttrs (map chkCheck chkNames)
     // phpDebian
+    // import ./python.nix {
+      inherit lib toolPkgs system;
+      python = (pythonEnvsFor toolPkgs).dev;
+    }
+    // import ./basedpyright.nix {
+      inherit
+        api
+        lib
+        system
+        toolPkgs
+        ;
+    }
+    // import ./deptry.nix {
+      inherit
+        api
+        lib
+        system
+        toolPkgs
+        ;
+    }
     // import ./outdated.nix {
       python = (pythonEnvsFor toolPkgs).dev;
       runtimePython = (pythonEnvsFor toolPkgs).runtime;

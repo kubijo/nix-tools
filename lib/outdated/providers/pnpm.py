@@ -4,15 +4,32 @@ import json
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Literal, NotRequired, TypedDict, cast
 
 from common import Failure, Result, command_json, records, relative, snapshot, validate_adapter
 
 from .contract import ProviderConfig
 
 
+class Project(TypedDict):
+    path: str
+    name: NotRequired[str]
+    dependencies: NotRequired[dict[str, dict[str, str]]]
+    devDependencies: NotRequired[dict[str, dict[str, str]]]
+    optionalDependencies: NotRequired[dict[str, dict[str, str]]]
+
+
+class Update(TypedDict):
+    name: str
+    current: str
+    spec: str
+    latest: NotRequired[str]
+    compatible: NotRequired[str]
+
+
 def report(config: ProviderConfig, root: Path, timeout: float) -> Iterator[Result]:
-    relative(root, 'package.json')
-    relative(root, 'pnpm-lock.yaml')
+    _ = relative(root, 'package.json')
+    _ = relative(root, 'pnpm-lock.yaml')
     with snapshot(root) as work:
         projects = records(
             command_json(
@@ -32,21 +49,27 @@ def report(config: ProviderConfig, root: Path, timeout: float) -> Iterator[Resul
         )
         if not projects:
             raise Failure('pnpm returned no workspace inventory')
-        for project in projects:
+        for record in projects:
+            project = cast(Project, cast(object, record))
             path = Path(project['path'])
             if not path.resolve().is_relative_to(work):
                 raise Failure('pnpm project escaped the disposable workspace')
             source = 'pnpm-lock.yaml:' + path.relative_to(work).as_posix()
-            groups = ('dependencies', 'devDependencies', 'optionalDependencies')
+            groups: tuple[Literal['dependencies', 'devDependencies', 'optionalDependencies'], ...] = (
+                'dependencies',
+                'devDependencies',
+                'optionalDependencies',
+            )
             manifest = command_json([config['exe'], 'pkg', 'get', *groups, '--json', '--dir', str(path)], path, timeout)
             if not isinstance(manifest, dict):
                 raise Failure('Unsupported pnpm manifest report')
+            manifest = cast(dict[str, dict[str, str]], manifest)
             if any(set(manifest.get(group, {})) - set(project.get(group, {})) for group in groups):
                 raise Failure('pnpm lock inventory omitted declared dependencies')
-            updates = []
+            updates: list[Update] = []
             count = 0
             for group in groups:
-                for name, item in project.get(group, {}).items():
+                for name, item in cast(dict[str, dict[str, str]], project.get(group, {})).items():
                     count += 1
                     current = item['version']
                     if current.startswith(('link:', 'workspace:')):
@@ -65,16 +88,17 @@ def report(config: ProviderConfig, root: Path, timeout: float) -> Iterator[Resul
                     )
                     if (
                         not isinstance(data, dict)
-                        or len(data) > 1
-                        or any(not isinstance(v, dict) for v in data.values())
+                        or len(cast(dict[str, object], data)) > 1
+                        or any(not isinstance(v, dict) for v in cast(dict[str, object], data).values())
                     ):
                         raise Failure('Unsupported pnpm outdated JSON schema')
-                    update = {'name': name, 'current': current, 'spec': spec}
+                    update: Update = {'name': name, 'current': current, 'spec': spec}
                     if data:
-                        candidate = next(iter(data.values()))
+                        candidate = next(iter(cast(dict[str, dict[str, str]], data).values()))
                         if candidate['current'] != current:
                             raise Failure('pnpm inventory and update report disagree')
-                        update |= {'latest': candidate['latest'], 'compatible': candidate.get('wanted', '')}
+                        update['latest'] = candidate['latest']
+                        update['compatible'] = candidate.get('wanted', '')
                     updates.append(update)
             if updates:
                 with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as report:

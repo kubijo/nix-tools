@@ -1,6 +1,9 @@
 """Release entries, Nix input graphs and GitHub workflow references."""
 
 import re
+from collections.abc import Callable, Iterator, Mapping
+from pathlib import Path
+from typing import Required, TypedDict, cast
 from urllib.parse import quote
 
 import yaml
@@ -16,15 +19,51 @@ from common import (
     validate_adapter,
     version,
 )
+from network import Client
+from releases import ReleaseSource
 
 
-def github_url(repo, kind, value):
+class ReleaseEntry(ReleaseSource, total=False):
+    name: Required[str]
+    version: str
+    source: str
+    unknown: str
+    skip: str
+    versionCommand: list[str]
+    versionPattern: str
+    reporter: str
+
+
+class NixNode(TypedDict, total=False):
+    inputs: dict[str, object]
+    locked: dict[str, str]
+    original: dict[str, str]
+
+
+class NixLock(TypedDict):
+    nodes: dict[str, NixNode]
+    root: str
+
+
+class NixMetadata(TypedDict):
+    locks: NixLock
+
+
+class WorkflowJob(TypedDict, total=False):
+    uses: object
+    steps: list[dict[str, object]]
+
+
+type SourceJob = tuple[str, Callable[[], Result]]
+
+
+def github_url(repo: str, kind: str, value: str) -> str:
     if not re.fullmatch(r'[\w.-]+/[\w.-]+', repo):
         return ''
     return f'https://github.com/{repo}/{kind}/{quote(value, safe="")}'
 
 
-def registry_url(kind, project, value):
+def registry_url(kind: str, project: object, value: str) -> str:
     if not isinstance(project, str) or not project or not value:
         return ''
     name, release = quote(project, safe='@/'), quote(value, safe='')
@@ -37,15 +76,15 @@ def registry_url(kind, project, value):
     return ''
 
 
-def release_entry(client, item, provider='tools', root=None):
+def release_entry(client: Client, item: ReleaseEntry, provider: str = 'tools', root: Path | None = None) -> Result:
     name, current = item['name'], item.get('version', '')
     source = item.get('source', name)
 
-    if item.get('unknown'):
-        return Result(provider, name, source, 'unknown', current, detail=item['unknown'])
+    if unknown := item.get('unknown'):
+        return Result(provider, name, source, 'unknown', current, detail=unknown)
 
-    if item.get('skip'):
-        return Result(provider, name, source, 'skipped', current, detail=item['skip'])
+    if skip := item.get('skip'):
+        return Result(provider, name, source, 'skipped', current, detail=skip)
 
     if 'versionCommand' in item:
         if root is None:
@@ -62,10 +101,11 @@ def release_entry(client, item, provider='tools', root=None):
             raise Failure('Runtime command did not return one valid version')
 
     kind = item.get('provider', 'github')
+    tag = ''
     try:
         if kind == 'github':
             tag, latest = client.release(
-                item['repo'],
+                item.get('repo', ''),
                 tags=item.get('tags', False),
                 **({'tagPattern': item['tagPattern']} if 'tagPattern' in item else {}),
             )
@@ -75,6 +115,8 @@ def release_entry(client, item, provider='tools', root=None):
         return Result(provider, name, source, 'skipped', current, detail=str(error))
 
     if kind in ('npm', 'crates'):
+        if 'reporter' not in item:
+            raise Failure('Semantic version comparison requires a reporter')
         document = command_json([item['reporter'], 'compare', current, latest], '.', client.timeout)
         rows = list(validate_adapter(document, provider, source))
         if len(rows) != 1 or rows[0].current != current or rows[0].latest != latest:
@@ -88,7 +130,7 @@ def release_entry(client, item, provider='tools', root=None):
     if result.state == 'unknown':
         result.state = 'skipped'
     result.version_url = (
-        github_url(item['repo'], 'tree' if item.get('tags') else 'releases/tag', tag)
+        github_url(item.get('repo', ''), 'tree' if item.get('tags') else 'releases/tag', tag)
         if kind == 'github'
         else registry_url(kind, item.get('project'), latest)
     )
@@ -97,26 +139,27 @@ def release_entry(client, item, provider='tools', root=None):
     return result
 
 
-def input_owners(lock):
+def input_owners(lock: NixLock) -> dict[str, set[str]]:
     nodes, root = lock['nodes'], lock['root']
-    owners = {}
+    owners: dict[str, set[str]] = {}
 
-    def resolve(edge, seen=()):
+    def resolve(edge: object, seen: tuple[tuple[str, ...], ...] = ()) -> str:
         if isinstance(edge, str):
             if edge not in nodes:
                 raise Failure('Nix lock graph references a missing node')
             return edge
-        if not isinstance(edge, list) or not all(isinstance(x, str) for x in edge):
+        if not isinstance(edge, list) or not all(isinstance(x, str) for x in cast(list[object], edge)):
             raise Failure('Invalid Nix follows reference')
+        edge = cast(list[str], edge)
         key = tuple(edge)
         if key in seen:
             raise Failure('Cyclic Nix follows reference')
         node = root
         for part in edge:
-            node = resolve(nodes[node]['inputs'][part], seen + (key,))
+            node = resolve(nodes[node].get('inputs', {})[part], seen + (key,))
         return node
 
-    def walk(node, path, ancestors):
+    def walk(node: str, path: list[str], ancestors: set[str]) -> None:
         if node in ancestors:
             return
         for name, edge in nodes[node].get('inputs', {}).items():
@@ -129,10 +172,10 @@ def input_owners(lock):
     return owners
 
 
-def nix_jobs(config, root, client):
+def nix_jobs(config: Mapping[str, str], root: Path, client: Client) -> Iterator[SourceJob]:
     lock_file = config.get('lockFile', 'flake.lock')
-    relative(root, lock_file)
-    relative(root, 'flake.nix')
+    _ = relative(root, lock_file)
+    _ = relative(root, 'flake.nix')
     with snapshot(root) as work:
         metadata = command_json(
             [
@@ -151,7 +194,7 @@ def nix_jobs(config, root, client):
             work,
             client.timeout,
         )
-    lock = metadata['locks']
+    lock = cast(NixMetadata, metadata)['locks']
     owners = input_owners(lock)
 
     if not owners:
@@ -168,7 +211,9 @@ def nix_jobs(config, root, client):
         yield label, lambda node=node, label=label: nix_input(node, label, config, root, client)
 
 
-def nix_input(node, label, config, root, client):
+def nix_input(node: NixNode, label: str, config: Mapping[str, str], root: Path, client: Client) -> Result:
+    if 'locked' not in node:
+        raise Failure('Nix input has no locked source')
     locked, original = node['locked'], node.get('original', {})
     current = locked.get('rev', locked.get('narHash', ''))
     source = config.get('lockFile', 'flake.lock') + ':' + label
@@ -222,8 +267,8 @@ def nix_input(node, label, config, root, client):
         rows = dict(line.split('\t', 1)[::-1] for line in output.splitlines())
         matches = {rows[p] for p in patterns if p in rows}
 
-        if f'refs/tags/{ref}^{{}}' in rows:
-            matches.discard(rows.get(f'refs/tags/{ref}'))
+        if f'refs/tags/{ref}^{{}}' in rows and (direct := rows.get(f'refs/tags/{ref}')):
+            matches.discard(direct)
 
         if len(matches) != 1:
             raise Failure('Git ref is missing or ambiguous')
@@ -245,23 +290,24 @@ def nix_input(node, label, config, root, client):
     )
 
 
-def workflow_jobs(config, root, client):
+def workflow_jobs(config: Mapping[str, str], root: Path, client: Client) -> Iterator[SourceJob]:
     directory = relative(root, config.get('path', '.github/workflows'), directory=True)
     paths = sorted(set(directory.glob('*.yml')) | set(directory.glob('*.yaml')))
 
     if not paths:
         raise Failure('No workflow files found in the enabled directory')
 
-    refs = {}
+    refs: dict[str, set[str]] = {}
     for path in paths:
-        workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
+        workflow = cast(object, yaml.load(path.read_text(), Loader=yaml.BaseLoader))
 
-        if not isinstance(workflow, dict) or not isinstance(workflow.get('jobs'), dict):
+        if not isinstance(workflow, dict) or not isinstance(cast(dict[str, object], workflow).get('jobs'), dict):
             raise Failure('Invalid workflow jobs mapping')
 
-        for job in workflow['jobs'].values():
-            if not isinstance(job, dict):
+        for value in cast(dict[str, object], workflow['jobs']).values():
+            if not isinstance(value, dict):
                 raise Failure('Invalid workflow job')
+            job = cast(WorkflowJob, cast(object, value))
             uses = ([job['uses']] if 'uses' in job else []) + [
                 step['uses'] for step in job.get('steps', []) if 'uses' in step
             ]
@@ -271,8 +317,8 @@ def workflow_jobs(config, root, client):
                     raise Failure('Invalid workflow uses reference')
                 refs.setdefault(value, set()).add(str(path.relative_to(root)))
 
-    for ref, paths in sorted(refs.items()):
-        source = ', '.join(sorted(paths))
+    for ref, owners in sorted(refs.items()):
+        source = ', '.join(sorted(owners))
         yield ref, lambda ref=ref, source=source: action(ref, source, client)
 
     if not refs:
@@ -288,7 +334,7 @@ def workflow_jobs(config, root, client):
         )
 
 
-def action(ref, source, client):
+def action(ref: str, source: str, client: Client) -> Result:
     if ref.startswith('./'):
         return Result(
             'githubActions', ref, source, 'skipped', detail='Local action/workflow; versioned with this repository'

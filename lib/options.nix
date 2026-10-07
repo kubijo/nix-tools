@@ -176,6 +176,87 @@ rec {
         ;
     };
 
+  deptryOptions =
+    {
+      enable ? true,
+      projects ? { },
+    }:
+    {
+      inherit enable projects;
+    };
+
+  deptryProjectOptions =
+    {
+      root ? ".",
+      sourceRoots ? [ "." ],
+      configFile ? "pyproject.toml",
+      package ? null,
+      exe ? null,
+      extraOptions ? [ ],
+      outdated ? null,
+    }:
+    let
+      relative = value: lib.isString value && value != "" && !(lib.hasPrefix "/" value);
+    in
+    assert lib.assertMsg (relative root) "deptry: root must be a nonempty repository-relative string";
+    assert lib.assertMsg (
+      lib.isList sourceRoots && sourceRoots != [ ] && lib.all relative sourceRoots
+    ) "deptry: sourceRoots must be a nonempty list of project-relative strings";
+    assert lib.assertMsg (
+      lib.isPath configFile || (lib.isString configFile && configFile != "")
+    ) "deptry: configFile must be a path or nonempty string";
+    {
+      inherit
+        root
+        sourceRoots
+        configFile
+        package
+        exe
+        extraOptions
+        outdated
+        ;
+    };
+
+  basedpyrightOptions =
+    {
+      enable ? true,
+      projects ? { },
+    }:
+    {
+      inherit enable projects;
+    };
+
+  basedpyrightProjectOptions =
+    {
+      configFile ? null,
+      python ? null,
+      reporter ? "native",
+      package ? null,
+      exe ? null,
+      outdated ? null,
+    }:
+    assert lib.assertMsg (
+      lib.isString configFile
+      && !(lib.hasPrefix "/" configFile)
+      && baseNameOf configFile == "pyproject.toml"
+    ) "basedpyright: configFile must explicitly name a repository-relative pyproject.toml string";
+    assert lib.assertMsg (lib.isDerivation python)
+      "basedpyright: python must explicitly provide a Nix Python environment with bin/python";
+    assert lib.assertMsg (lib.elem reporter [
+      "native"
+      "rich"
+    ]) "basedpyright: reporter must be native or rich";
+    {
+      inherit
+        configFile
+        python
+        reporter
+        package
+        exe
+        outdated
+        ;
+    };
+
   linkCheckerOptions =
     {
       enable ? true,

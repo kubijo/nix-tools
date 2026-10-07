@@ -1,0 +1,5 @@
+[tool.basedpyright]
+typeCheckingMode = "all"
+pythonVersion = "3.14"
+include = ["src"]
+extraPaths = ["support"]

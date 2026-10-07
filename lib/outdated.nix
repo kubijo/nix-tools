@@ -9,6 +9,13 @@
   entries,
 }:
 let
+  source = lib.fileset.toSource {
+    root = ./.;
+    fileset = lib.fileset.unions [
+      ./outdated
+      ./terminal_env.py
+    ];
+  };
   toolRecords = import ./tool-records.nix { inherit lib toolPkgs; };
   nodeReport = import ./outdated-node.nix { inherit lib toolPkgs; };
   inherit (builtins)
@@ -276,7 +283,7 @@ let
     passthru.inventory = settings;
     text = ''
       export SSL_CERT_FILE="''${SSL_CERT_FILE:-${toolPkgs.cacert}/etc/ssl/certs/ca-bundle.crt}"
-      exec ${python}/bin/python ${./outdated}/main.py --config ${toolPkgs.writeText "outdated.json" (toJSON settings)} "$@"
+      exec ${python}/bin/python ${source}/outdated/main.py --config ${toolPkgs.writeText "outdated.json" (toJSON settings)} "$@"
     '';
   };
 in

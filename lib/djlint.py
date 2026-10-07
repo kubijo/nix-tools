@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+from typing import cast
 
 # Accept only style and rule switches: discovery, mode, external configuration
 # and success-suppression switches belong to nix-tools, never to the native invocation.
@@ -50,7 +51,7 @@ CONFIG_KEYS = {key.replace('-', '_') for key in FLAGS | (VALUES - {'indent-css',
 }
 
 
-def native_options(options):
+def native_options(options: list[str]) -> list[str]:
     index = 0
     while index < len(options):
         argument = options[index]
@@ -77,18 +78,21 @@ def native_options(options):
     return options
 
 
-def load_policy(policy, syntax):
+def load_policy(policy: str | pathlib.Path, syntax: str) -> dict[str, object]:
     content = pathlib.Path(policy).read_text(encoding='utf-8')
-    settings = json.loads(content) if syntax == 'json' else tomllib.loads(content)
+    settings = cast(object, json.loads(content) if syntax == 'json' else tomllib.loads(content))
 
     if syntax == 'pyproject':
-        tool_settings = settings.get('tool')
-        if not isinstance(tool_settings, dict) or not isinstance(tool_settings.get('djlint'), dict):
+        tool_settings = cast(dict[str, object], settings).get('tool') if isinstance(settings, dict) else None
+        if not isinstance(tool_settings, dict) or not isinstance(
+            cast(dict[str, object], tool_settings).get('djlint'), dict
+        ):
             raise ValueError('pyproject.toml must contain a [tool.djlint] table')
-        settings = tool_settings['djlint']
+        settings = cast(dict[str, object], tool_settings)['djlint']
 
     if not isinstance(settings, dict):
         raise TypeError('djLint config must be an object/table')
+    settings = cast(dict[str, object], settings)
 
     unknown = settings.keys() - CONFIG_KEYS
     if unknown:
@@ -109,12 +113,13 @@ def load_policy(policy, syntax):
         'max_blank_lines',
         'format_attribute_js_json_min_props',
     ):
-        if key in settings and (type(settings[key]) is not int or settings[key] < 0):
+        value = settings.get(key)
+        if key in settings and (type(value) is not int or value < 0):
             raise ValueError(f'djLint config {key} must be a nonnegative integer')
     return settings
 
 
-def main():
+def main() -> int:
     tool, mode, profile, policy, syntax, option_count, *arguments = sys.argv[1:]
 
     if mode not in ('format', 'lint'):
@@ -137,7 +142,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='nix-tools-djlint-') as directory:
         root = pathlib.Path(directory)
         # Canonical JSON also avoids native config parse failures being swallowed.
-        (root / '.djlintrc').write_text(json.dumps(settings), encoding='utf-8')
+        _ = (root / '.djlintrc').write_text(json.dumps(settings), encoding='utf-8')
         (root / '.git').mkdir()
         for filename in files:
             source = pathlib.Path(filename)
@@ -171,12 +176,12 @@ def main():
                 print(f'djLint ({profile}): {filename}', file=sys.stderr)
                 if mode == 'format' and original and not result.stdout:
                     print('formatter returned empty output; source preserved', file=sys.stderr)
-                sys.stderr.buffer.write(result.stderr)
-                sys.stderr.buffer.write(result.stdout)
+                _ = sys.stderr.buffer.write(result.stderr)
+                _ = sys.stderr.buffer.write(result.stdout)
                 status = 1
 
             elif mode == 'format' and result.stdout != original:
-                source.write_bytes(result.stdout)
+                _ = source.write_bytes(result.stdout)
 
     return status
 

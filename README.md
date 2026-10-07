@@ -72,6 +72,7 @@ inventories are separate opt-ins; standalone tool releases require explicit sour
 
 - [Tools, options and exclusions](docs/reference.md)
 - [PHP and Debian packaging](docs/reference.md#php-and-debian-packaging)
+- [Python dependency checks](docs/reference.md#python-dependency-checks)
 - [HTML templates](docs/reference.md#html-templates) · [Salt and whitespace](docs/reference.md#saltjinja-and-whitespace)
 - [Custom tools](docs/reference.md#splicing-in-your-own-tools) · [Project checks](docs/reference.md#exported-checks)
 - [Grit](docs/reference.md#grit) · [ast-grep](docs/reference.md#ast-grep)
