@@ -12,6 +12,16 @@
   package ? null,
 }:
 let
+  inherit (builtins)
+    baseNameOf
+    length
+    match
+    pathExists
+    readDir
+    readFile
+    readFileType
+    stringLength
+    ;
   isRelative =
     value:
     lib.isString value
@@ -21,9 +31,8 @@ let
     && lib.all (part: part != "..") (lib.splitString "/" value);
   isExclusion = value: isRelative value && !(lib.hasPrefix "!" value);
   validProfileName =
-    name:
-    builtins.stringLength name <= 64 && builtins.match "^[a-z]([a-z0-9-]*[a-z0-9])?$" name != null;
-  validPatternName = name: builtins.match "^[a-z][a-z0-9_]*$" name != null;
+    name: stringLength name <= 64 && match "^[a-z]([a-z0-9-]*[a-z0-9])?$" name != null;
+  validPatternName = name: match "^[a-z][a-z0-9_]*$" name != null;
   validLogLevel = value: lib.isString value && value != "" && !(lib.hasPrefix "-" value);
   safeGritArgs =
     {
@@ -68,7 +77,7 @@ let
               valid = type == "regular" && lib.hasSuffix ".md" name;
             }
           ]
-      ) (builtins.readDir directory)
+      ) (readDir directory)
     );
 
   writeLines =
@@ -79,18 +88,16 @@ let
     name: profile:
     let
       patternType =
-        if profile.patterns != null && builtins.pathExists profile.patterns then
-          builtins.readFileType profile.patterns
+        if profile.patterns != null && pathExists profile.patterns then
+          readFileType profile.patterns
         else
           null;
       entries = if patternType == "directory" then walk profile.patterns "" else [ ];
       patternFiles = lib.filter (entry: entry.valid) entries;
       invalidEntries = lib.filter (entry: !entry.valid) entries;
-      patternNames = map (
-        entry: lib.removeSuffix ".md" (builtins.baseNameOf entry.relative)
-      ) patternFiles;
+      patternNames = map (entry: lib.removeSuffix ".md" (baseNameOf entry.relative)) patternFiles;
       gritFenceCounts = map (
-        entry: builtins.length (lib.splitString "```grit" (builtins.readFile entry.path)) - 1
+        entry: length (lib.splitString "```grit" (readFile entry.path)) - 1
       ) patternFiles;
       uniquePatternNames = lib.unique patternNames;
 
@@ -150,7 +157,7 @@ let
             GRIT_SORT = lib.getExe' toolPkgs.coreutils "sort";
             GRIT_TELEMETRY_DISABLED = "true";
           };
-          text = builtins.readFile ./grit-runner.sh;
+          text = readFile ./grit-runner.sh;
           meta.mainProgram = runnerName;
         };
 
@@ -182,16 +189,13 @@ let
       gritFenceCounts
     ) "lint.grit.profiles.${name}: every Markdown pattern must contain exactly one ```grit fence";
     assert lib.assertMsg (
-      builtins.length patternNames == builtins.length uniquePatternNames
+      length patternNames == length uniquePatternNames
     ) "lint.grit.profiles.${name}: Markdown pattern filenames must be unique across the collection";
     assert lib.assertMsg
       (
         profile.paths != [ ]
         && lib.all (
-          path:
-          isRelative path
-          && builtins.pathExists "${src}/${path}"
-          && builtins.readFileType "${src}/${path}" == "directory"
+          path: isRelative path && pathExists "${src}/${path}" && readFileType "${src}/${path}" == "directory"
         ) profile.paths
       )
       "lint.grit.profiles.${name}.paths must contain existing relative directories without '..' segments";
@@ -249,7 +253,7 @@ let
       GRIT_RM = lib.getExe' toolPkgs.coreutils "rm";
       GRIT_SED = lib.getExe toolPkgs.gnused;
     };
-    text = builtins.readFile ./grit-aggregate.sh;
+    text = readFile ./grit-aggregate.sh;
     meta.mainProgram = "grit-check";
   };
   runnable = runner: {

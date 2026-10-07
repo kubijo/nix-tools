@@ -5,6 +5,12 @@
   toolPkgs,
 }:
 let
+  inherit (builtins)
+    attrNames
+    baseNameOf
+    hasAttr
+    tryEval
+    ;
   fixtureRoot = ./fixtures/ast-grep;
   configFile = ".config/ast-grep/sgconfig.yml";
 
@@ -50,7 +56,7 @@ let
     };
   };
 
-  rejects = value: !(builtins.tryEval value).success;
+  rejects = value: !(tryEval value).success;
   emptyProfilesProject = api.configure {
     inherit system;
     src = fixtureRoot + "/clean";
@@ -170,17 +176,17 @@ let
     };
   };
 in
-assert rejects (builtins.attrNames emptyProfilesProject.checks);
+assert rejects (attrNames emptyProfilesProject.checks);
 assert rejects missingConfigProject.checks.ast-grep-policy;
 assert rejects missingPathsProject.checks.ast-grep-policy;
-assert rejects (builtins.attrNames invalidNameProject.checks);
+assert rejects (attrNames invalidNameProject.checks);
 assert rejects invalidGateProject.checks.ast-grep-policy;
 assert rejects unsafeExcludeProject.checks.ast-grep-policy;
-assert !(builtins.hasAttr "ast-grep-javascript" disabledProject.checks);
-assert !(builtins.hasAttr "ast-grep-javascript-check" disabledProject.apps);
-assert !(builtins.hasAttr "ast-grep-javascript-apply" disabledProject.apps);
-assert builtins.baseNameOf disabledProfilesProject.apps.lint.program == "repochk";
-assert !(builtins.hasAttr "ast-grep-codemod" ungatedProject.checks);
+assert !(hasAttr "ast-grep-javascript" disabledProject.checks);
+assert !(hasAttr "ast-grep-javascript-check" disabledProject.apps);
+assert !(hasAttr "ast-grep-javascript-apply" disabledProject.apps);
+assert baseNameOf disabledProfilesProject.apps.lint.program == "repochk";
+assert !(hasAttr "ast-grep-codemod" ungatedProject.checks);
 toolPkgs.runCommandLocal "ast-grep-consumer"
   {
     nativeBuildInputs = with toolPkgs; [

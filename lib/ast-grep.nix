@@ -12,6 +12,14 @@
   exclude ? [ ],
 }:
 let
+  inherit (builtins)
+    match
+    pathExists
+    readFile
+    readFileType
+    stringLength
+    toJSON
+    ;
   isRelative =
     value:
     lib.isString value
@@ -22,8 +30,7 @@ let
 
   profileNames = if lib.isAttrs profiles then lib.attrNames profiles else [ ];
   validProfileName =
-    name:
-    builtins.stringLength name <= 64 && builtins.match "^[a-z]([a-z0-9-]*[a-z0-9])?$" name != null;
+    name: stringLength name <= 64 && match "^[a-z]([a-z0-9-]*[a-z0-9])?$" name != null;
 
   astGrepPackage = if package == null then toolPkgs.ast-grep else package;
 
@@ -58,10 +65,10 @@ let
             AST_GREP_MODE = mode;
             AST_GREP_TREE_ROOT_FILE = treeRootFile;
             AST_GREP_CONFIG_FILE = profile.configFile;
-            AST_GREP_PATHS_JSON = builtins.toJSON profile.paths;
-            AST_GREP_EXCLUDES_JSON = builtins.toJSON (exclude ++ profile.exclude);
+            AST_GREP_PATHS_JSON = toJSON profile.paths;
+            AST_GREP_EXCLUDES_JSON = toJSON (exclude ++ profile.exclude);
           };
-          text = builtins.readFile ./ast-grep.sh;
+          text = readFile ./ast-grep.sh;
           meta.mainProgram = runnerName;
         };
 
@@ -77,7 +84,7 @@ let
     assert lib.assertMsg (profile.configFile != null && isRelative profile.configFile)
       "lint.ast-grep.profiles.${name}.configFile must be a non-empty relative path without '..' segments";
     assert lib.assertMsg (
-      builtins.pathExists configPath && builtins.readFileType configPath == "regular"
+      pathExists configPath && readFileType configPath == "regular"
     ) "lint.ast-grep.profiles.${name}.configFile does not exist in the consumer source";
     assert lib.assertMsg (profile.paths != [ ] && lib.all isRelative profile.paths)
       "lint.ast-grep.profiles.${name}.paths must contain non-empty relative paths without '..' segments";
