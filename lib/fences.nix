@@ -8,6 +8,7 @@
   commands,
 }:
 let
+  inherit (builtins) toJSON;
   tags = lib.attrNames commands;
 
   pyproject = toolPkgs.writeText "pyproject.toml" ''
@@ -31,7 +32,7 @@ let
 
     import subprocess
 
-    COMMANDS = ${builtins.toJSON commands}
+    COMMANDS = ${toJSON commands}
 
 
     def _entry(tag):

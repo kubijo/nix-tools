@@ -5,8 +5,12 @@
   toolPkgs,
 }:
 let
-  inherit (builtins) attrNames deepSeq tryEval;
-  inherit (builtins) hasAttr;
+  inherit (builtins)
+    attrNames
+    deepSeq
+    hasAttr
+    tryEval
+    ;
 
   fixtureRoot = ./fixtures/grit;
   policyPatterns = fixtureRoot + "/policy";
