@@ -28,10 +28,14 @@ The command finds `treeRootFile` upward. It runs online, outside cached `checks`
 | 1    | Outdated findings, without incomplete lookups                                          |
 | 2    | Error, unknown, blocked, missing input or empty report; takes precedence over findings |
 
-`--json` emits `schemaVersion = 1`, `state`, `counts`, and rows with `provider`, `name`, `source`, `state`, `current`,
-`compatible`, `latest`, `detail`. States: `up-to-date`, `outdated`, `ahead`, `pinned`, `skipped`, `unknown`, `blocked`,
-`error`. Unknown sources never count as current. Skips and pins stay visible without failing the report. `latest` means
-upstream availability; `compatible` is a candidate, not a tested upgrade.
+`--json` emits `schemaVersion = 2`, `state`, `counts`, and rows with `provider`, `project`, `name`, `source`, `state`,
+`current`, `compatible`, `latest`, `detail`. States: `up-to-date`, `outdated`, `ahead`, `pinned`, `skipped`, `unknown`,
+`blocked`, `error`. Unknown sources never count as current. Skips and pins stay visible without failing the report.
+`latest` means upstream availability; `compatible` is a candidate, not a tested upgrade.
+
+Schema 2 adds `project`: the configured name, `default` for legacy package-manager roots, or `""` for other providers.
+Dependency names and project-relative `source` values are unchanged; use `(provider, project, name, source)` to identify
+rows across projects. JSON consumers must accept schema 2. Custom adapters still return schema 1.
 
 TTY output has compact bordered tables, live progress, and known public release/ref links. Pipes, CI, and coding agents
 get terse plain text. Agent detection checks nonempty `CLAUDECODE`, `CURSOR_AGENT`, `GEMINI_CLI`, `CODEX_THREAD_ID`,
@@ -47,6 +51,34 @@ and `githubApi` (default `https://api.github.com`; custom bases support commit l
 entry unless `enable = false`. Providers accept repository-relative `root` (default `.`); missing enabled inputs fail.
 Native providers accept `package` or `exe`, which must satisfy the bundled client's CLI/JSON contract. Keep credentials
 in the runtime environment or native client configuration.
+
+Cargo, UV, npm, pnpm, Yarn and Composer also accept named projects:
+
+```nix
+outdated = {
+  uv.projects = {
+    tooling.root = ".";
+    api.root = "src/api";
+  };
+  pnpm.projects = {
+    probe.root = "tools/web-probe";
+    app.root = "src/web/app";
+  };
+};
+```
+
+`projects` must be nonempty and cannot be combined with provider-level `root`. Each project requires `root`, relative to
+the repository; absolute paths, parent traversal and escapes are rejected. Names use 1–64 letters, digits, `_` or `-`,
+starting with a letter or digit. Tool overrides remain provider-level. Without `projects`, existing configuration checks
+one `default` project.
+
+Each project uses its own manifests, locks and registry configuration in an isolated copy, with runtime credentials
+inherited. Roots resolving to the same directory fail all aliases; distinct nested roots are allowed. A failed project
+keeps other projects' results and forces exit 2. All jobs share `concurrency`; no project results are cached. Terminal
+tables and plain-text rows identify projects as `provider/project`.
+
+For pnpm, put `${…}` credentials in a user auth file selected with `NPM_CONFIG_USERCONFIG`; pnpm ignores them in
+repository `.npmrc` files. See [pnpm authentication settings](https://pnpm.io/npmrc).
 
 | Provider        | Default | Source and limit                                                    |
 | --------------- | ------- | ------------------------------------------------------------------- |

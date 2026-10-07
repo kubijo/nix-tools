@@ -13,7 +13,7 @@ import unittest
 import urllib.error
 import urllib.request
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from email.message import Message
 from http.client import HTTPMessage
 from typing import Self, cast, override
@@ -28,6 +28,7 @@ import network
 import releases
 import sources
 from providers import PROVIDERS, cargo, composer, npm, pnpm, uv, yarn
+from providers.contract import ProviderConfig
 from terminal_env import AGENT_ENVS
 
 
@@ -62,11 +63,237 @@ class Fixture(unittest.TestCase):
         return str(path)
 
 
+class Projects(Fixture):
+    def inventory(self, providers: dict[str, main.ProviderSettings], concurrency: int = 2) -> main.Inventory:
+        return {'providers': providers, 'tools': [], 'releases': [], 'adapters': [], 'concurrency': concurrency}
+
+    def test_legacy_roots_and_all_package_providers(self) -> None:
+        folder = self.root / 'nested'
+        folder.mkdir()
+        configurations: tuple[main.ProviderSettings, ...] = ({'exe': 'tool'}, {'exe': 'tool', 'root': 'nested'})
+        for provider in PROVIDERS:
+            for settings in configurations:
+                with self.subTest(provider=provider, settings=settings):
+                    config = self.inventory({provider: settings})
+                    mock = Mock(return_value=[common.Result(provider, 'same', 'lock', 'up-to-date')])
+                    with patch.dict(PROVIDERS, {provider: mock}):
+                        rows = main.collect_jobs(config, self.root, network.Client(timeout=7))
+                    mock.assert_called_once_with(settings, folder if 'root' in settings else self.root, 7)
+                    self.assertEqual(
+                        [(row.provider, row.project, row.name) for row in rows], [(provider, 'default', 'same')]
+                    )
+
+    def test_named_projects_share_provider_options_and_retain_partial_results(self) -> None:
+        for name in ('good', 'partial', 'failed'):
+            (self.root / name).mkdir()
+
+        def report(options: ProviderConfig, root: pathlib.Path, timeout: float) -> Iterator[common.Result]:
+            self.assertEqual(options, {'exe': 'pinned'})
+            self.assertEqual(timeout, 7)
+            if root.name == 'failed':
+                raise RuntimeError('private-secret')
+            yield common.Result('uv', 'same', 'uv.lock', 'outdated', '1', latest='2')
+            if root.name == 'partial':
+                raise common.Failure('Missing dependency inventory')
+
+        config = self.inventory(
+            {
+                'uv': {
+                    'exe': 'pinned',
+                    'projects': {name: {'root': name} for name in ('partial', 'missing', 'good', 'failed')},
+                }
+            }
+        )
+        with patch.dict(PROVIDERS, {'uv': report}):
+            rows = main.collect_jobs(config, self.root, network.Client(timeout=7))
+        self.assertEqual(
+            [(r.project, r.state) for r in rows],
+            [
+                ('partial', 'outdated'),
+                ('partial', 'error'),
+                ('missing', 'error'),
+                ('good', 'outdated'),
+                ('failed', 'error'),
+            ],
+        )
+        self.assertEqual(common.summary(rows), ('ERROR', 2))
+        self.assertNotIn('private-secret', str([r.json() for r in rows]))
+
+    def test_root_validation_and_equivalent_roots_reject_all_aliases(self) -> None:
+        (self.root / 'real').mkdir()
+        (self.root / 'alias').symlink_to(self.root / 'real', target_is_directory=True)
+        (self.root / 'escape').symlink_to(self.root.parent, target_is_directory=True)
+        (self.root / 'loop').symlink_to('loop', target_is_directory=True)
+        _ = self.write('file', 'not a directory')
+        paths = {
+            'one': './real',
+            'two': 'real/.',
+            'three': 'alias',
+            'escape': 'escape',
+            'parent': '../',
+            'absolute': str(self.root),
+            'empty': '',
+            'file': 'file',
+            'loop': 'loop',
+            'nul': 'bad\0name',
+            'good': '.',
+        }
+        config = self.inventory({'uv': {'projects': {name: {'root': path} for name, path in paths.items()}}})
+        mock = Mock(return_value=[common.Result('uv', 'same', 'uv.lock', 'up-to-date')])
+        with patch.dict(PROVIDERS, {'uv': mock}):
+            rows = main.collect_jobs(config, self.root, network.Client())
+        self.assertEqual(mock.call_count, 1)
+        self.assertEqual({r.project for r in rows if r.state == 'error'}, set(paths) - {'good'})
+        for row in rows[:3]:
+            self.assertIn('Duplicate project root: one, three, two', row.detail)
+        self.assertEqual(rows[-1].project, 'good')
+
+    def test_duplicate_filesystem_identity_without_matching_path_spelling(self) -> None:
+        for name in ('real', 'alias', 'good'):
+            (self.root / name).mkdir()
+        original_stat = pathlib.Path.stat
+
+        def stat(path: pathlib.Path, *, follow_symlinks: bool = True) -> os.stat_result:
+            target = self.root / 'real' if path == self.root / 'alias' else path
+            return original_stat(target, follow_symlinks=follow_symlinks)
+
+        config = self.inventory({'uv': {'projects': {name: {'root': name} for name in ('real', 'alias', 'good')}}})
+        report = Mock(return_value=[common.Result('uv', 'same', 'uv.lock', 'up-to-date')])
+        with patch.object(pathlib.Path, 'stat', stat), patch.dict(PROVIDERS, {'uv': report}):
+            rows = main.collect_jobs(config, self.root, network.Client())
+        self.assertEqual(
+            [(r.project, r.state) for r in rows], [('real', 'error'), ('alias', 'error'), ('good', 'up-to-date')]
+        )
+        report.assert_called_once()
+        self.assertTrue(all('Duplicate project root' in row.detail for row in rows[:2]))
+
+    def test_global_concurrency_and_deterministic_order(self) -> None:
+        lock = threading.Lock()
+        overlap = threading.Barrier(2)
+        active = 0
+        maximum = 0
+        calls = 0
+
+        def report(_options: ProviderConfig, root: pathlib.Path, _timeout: float) -> Iterator[common.Result]:
+            nonlocal active, maximum, calls
+            with lock:
+                active += 1
+                calls += 1
+                maximum = max(maximum, active)
+            try:
+                _ = overlap.wait(2)
+                yield common.Result(root.parent.name, 'same', 'lock', 'outdated', '1', latest='2')
+            finally:
+                with lock:
+                    active -= 1
+
+        providers: dict[str, main.ProviderSettings] = {}
+        for provider in ('uv', 'pnpm'):
+            projects: dict[str, main.ProjectConfig] = {}
+            for name in ('alpha', 'beta'):
+                path = f'{provider}/{name}'
+                (self.root / path).mkdir(parents=True)
+                projects[name] = {'root': path}
+            providers[provider] = {'projects': projects}
+
+        def release(_client: network.Client, item: sources.ReleaseEntry, *, root: pathlib.Path) -> common.Result:
+            (result,) = report({}, root / 'tools' / item['name'], 7)
+            return result
+
+        config = self.inventory(providers)
+        config['tools'] = [{'name': name} for name in ('first', 'second')]
+        with (
+            patch.dict(PROVIDERS, {'uv': report, 'pnpm': report}),
+            patch.object(main, 'release_entry', side_effect=release),
+        ):
+            rows = main.collect_jobs(config, self.root, network.Client())
+        self.assertEqual(maximum, 2)
+        self.assertEqual(calls, 6)
+        self.assertEqual(
+            [(r.provider, r.project, r.state) for r in rows],
+            [
+                ('uv', 'alpha', 'outdated'),
+                ('uv', 'beta', 'outdated'),
+                ('pnpm', 'alpha', 'outdated'),
+                ('pnpm', 'beta', 'outdated'),
+                ('tools', '', 'outdated'),
+                ('tools', '', 'outdated'),
+            ],
+        )
+
+    def test_invalid_project_configuration_preserves_other_providers(self) -> None:
+        invalid: list[main.ProviderSettings] = [
+            {'projects': {}},
+            {'root': '.', 'projects': {'app': {'root': '.'}}},
+            {'projects': {'bad/name': {'root': '.'}}},
+        ]
+        for settings in invalid:
+            with self.subTest(settings=settings):
+                config = self.inventory({'uv': settings, 'pnpm': {}})
+                uv_report = Mock(side_effect=AssertionError('Invalid configuration must not execute'))
+                pnpm_report = Mock(return_value=[common.Result('pnpm', 'same', 'lock', 'up-to-date')])
+                with patch.dict(PROVIDERS, {'uv': uv_report, 'pnpm': pnpm_report}):
+                    rows = main.collect_jobs(config, self.root, network.Client())
+                uv_report.assert_not_called()
+                self.assertEqual([(r.provider, r.state) for r in rows], [('uv', 'error'), ('pnpm', 'up-to-date')])
+                self.assertEqual(rows[-1].project, 'default')
+                self.assertEqual(common.summary(rows), ('ERROR', 2))
+
+    def test_malformed_runtime_projects_retain_successful_results(self) -> None:
+        malformed: tuple[object, ...] = ({}, None, {'root': None}, {'root': 1})
+        pnpm_report = Mock(return_value=[common.Result('pnpm', 'same', 'lock', 'up-to-date')])
+        for project in malformed:
+            with self.subTest(project=project):
+                raw: object = {'projects': {'bad': project, 'good': {'root': '.'}}}
+                config = self.inventory({'uv': cast(main.ProviderSettings, cast(object, raw)), 'pnpm': {}})
+                uv_report = Mock(return_value=[common.Result('uv', 'same', 'uv.lock', 'up-to-date')])
+                with patch.dict(PROVIDERS, {'uv': uv_report, 'pnpm': pnpm_report}):
+                    rows = main.collect_jobs(config, self.root, network.Client())
+                self.assertEqual(
+                    [(r.provider, r.project, r.state) for r in rows],
+                    [('uv', 'bad', 'error'), ('uv', 'good', 'up-to-date'), ('pnpm', 'default', 'up-to-date')],
+                )
+                uv_report.assert_called_once()
+                self.assertEqual(common.summary(rows), ('ERROR', 2))
+        raw = {'projects': ['invalid']}
+        config = self.inventory({'uv': cast(main.ProviderSettings, cast(object, raw)), 'pnpm': {}})
+        with patch.dict(PROVIDERS, {'pnpm': pnpm_report}):
+            rows = main.collect_jobs(config, self.root, network.Client())
+        self.assertEqual([(r.provider, r.state) for r in rows], [('uv', 'error'), ('pnpm', 'up-to-date')])
+
+    def test_report_attribution_and_schema_boundary(self) -> None:
+        rows = [
+            common.Result('uv', 'same', 'uv.lock', 'outdated', '1', latest='2', project=name)
+            for name in ('tooling', 'api')
+        ]
+        with patch.dict(os.environ, {}, clear=True), contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(main.report(rows, False), 1)
+        for name in ('tooling', 'api'):
+            self.assertIn(f'uv/{name}: outdated same 1 → 2', output.getvalue())
+        with (
+            patch.dict(os.environ, {'TERM': 'xterm', 'COLUMNS': '120'}, clear=True),
+            contextlib.redirect_stdout(Terminal()) as output,
+        ):
+            self.assertEqual(main.report(rows, False), 1)
+        for name in ('tooling', 'api'):
+            self.assertIn(f'uv/{name}', output.getvalue())
+        self.assertEqual(output.getvalue().count('same'), 2)
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(main.report(rows, True), 1)
+        document = cast(dict[str, object], json.loads(output.getvalue()))
+        self.assertEqual(document['schemaVersion'], 2)
+        self.assertEqual(document['results'], [r.json() for r in rows])
+        legacy_adapter = {'schemaVersion': 1, 'results': [{'name': 'same', 'state': 'up-to-date'}]}
+        self.assertEqual(common.validate_adapter(legacy_adapter, 'adapter:test', '.')[0].project, '')
+        with self.assertRaises(common.Failure):
+            _ = common.validate_adapter({**legacy_adapter, 'schemaVersion': 2}, 'adapter:test', '.')
+
+
 class Protocol(Fixture):
     def test_registered_providers_dispatch_with_public_names(self) -> None:
         names = {'cargo', 'composer', 'npm', 'pnpm', 'uv', 'yarn'}
         self.assertEqual(set(PROVIDERS), names)
-        settings = {name: {'exe': name} for name in names}
+        settings: dict[str, main.ProviderSettings] = {name: {'exe': name} for name in names}
         reports = {name: Mock(return_value=[common.Result(name, 'fixture', '.', 'up-to-date')]) for name in names}
         config: main.Inventory = {'providers': settings, 'tools': [], 'releases': [], 'adapters': []}
         client = network.Client(timeout=7)
@@ -179,7 +406,7 @@ class Protocol(Fixture):
         with contextlib.redirect_stdout(io.StringIO()) as output:
             code = main.report([common.Result('x', 'name', '.', 'outdated', '1', '1.1', '2')], True)
         self.assertEqual(code, 1)
-        self.assertEqual(json.loads(output.getvalue())['schemaVersion'], 1)
+        self.assertEqual(json.loads(output.getvalue())['schemaVersion'], 2)
 
     def test_unknown_is_gray_only_on_interactive_text_output(self) -> None:
         row = common.Result('uv', 'package', 'uv.lock', 'unknown', '1.0')
@@ -362,7 +589,7 @@ class Releases(Fixture):
         self.assertEqual(row.current_url, 'https://pypi.org/project/thing/1.0/')
         self.assertEqual(
             list(row.json()),
-            ['provider', 'name', 'source', 'state', 'current', 'compatible', 'latest', 'detail'],
+            ['provider', 'project', 'name', 'source', 'state', 'current', 'compatible', 'latest', 'detail'],
         )
 
     def test_release_links_follow_verified_source_and_policy(self) -> None:

@@ -8,6 +8,15 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+### Added
+
+- Named projects for package-manager outdated providers, with per-project attribution, shared concurrency and partial
+  failure reporting. Legacy root configuration remains supported.
+
+### Changed
+
+- Outdated JSON reports use schema 2, adding `project` to each row. The custom-adapter protocol remains schema 1.
+
 ## [0.8.0] - 2026-10-07
 
 ### Added

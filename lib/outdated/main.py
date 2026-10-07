@@ -6,7 +6,7 @@ import re
 import sys
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import NotRequired, TypedDict, cast
 
@@ -26,6 +26,7 @@ from common import (
 )
 from network import Client
 from providers import PROVIDERS
+from providers.contract import ProviderConfig
 from rich import box
 from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TaskID, TextColumn, TimeElapsedColumn
@@ -58,8 +59,24 @@ class Adapter(TypedDict):
     timeout: NotRequired[float]
 
 
+class ProjectConfig(TypedDict):
+    root: str
+
+
+class ProviderSettings(TypedDict, total=False):
+    root: str
+    exe: str
+    git: str
+    path: str
+    lockFile: str
+    reporter: str
+    semver: str
+    cargo: str
+    projects: Mapping[str, ProjectConfig]
+
+
 class Inventory(TypedDict):
-    providers: Mapping[str, Mapping[str, str]]
+    providers: Mapping[str, ProviderSettings]
     tools: list[ReleaseEntry]
     releases: list[ReleaseEntry]
     adapters: list[Adapter]
@@ -129,21 +146,15 @@ def jobs(config: Inventory, root: Path, client: Client) -> list[Job]:
     for provider, settings in providers.items():
         source = settings.get('root', '.')
         try:
+            if provider in PROVIDERS:
+                output.extend(project_jobs(provider, settings, root, client.timeout))
+                continue
             directory = relative(root, source, directory=True)
-            if provider in ('nix', 'githubActions'):
-                factory = nix_jobs if provider == 'nix' else workflow_jobs
-                for name, callback in factory(settings, directory, client):
-                    add(provider, name, source, callback)
-            else:
-                package_provider = PROVIDERS[provider]
-                add(
-                    provider,
-                    provider,
-                    source,
-                    lambda callback=package_provider, settings=settings, directory=directory: callback(
-                        settings, directory, client.timeout
-                    ),
-                )
+            if 'projects' in settings:
+                raise Failure('Named projects are supported only for package-manager providers')
+            factory = {'nix': nix_jobs, 'githubActions': workflow_jobs}[provider]
+            for name, callback in factory(provider_options(settings), directory, client):
+                add(provider, name, source, callback)
         except Exception as error:  # noqa: BLE001 - preserve other providers and redact raw diagnostics
             detail = (
                 str(error) if isinstance(error, Failure) else f'Invalid provider inventory ({type(error).__name__})'
@@ -195,6 +206,59 @@ def jobs(config: Inventory, root: Path, client: Client) -> list[Job]:
         add('adapter:' + adapter['name'], adapter['name'], adapter.get('root', '.'), execute)
 
     return output
+
+
+def provider_options(settings: ProviderSettings) -> ProviderConfig:
+    return {key: value for key, value in settings.items() if isinstance(value, str)}
+
+
+def project_jobs(provider: str, settings: ProviderSettings, root: Path, timeout: float) -> list[Job]:
+    projects = settings.get('projects', {'default': {'root': settings.get('root', '.')}})
+    if not projects or ('projects' in settings and 'root' in settings):
+        return [
+            (
+                provider,
+                provider,
+                '.',
+                lambda: Result(provider, provider, '.', 'error', detail='Use root or nonempty projects, not both'),
+            )
+        ]
+    options = provider_options(settings)
+    directories: dict[str, Path] = {}
+    aliases: dict[tuple[int, int], list[str]] = {}
+    sources: dict[str, str] = {}
+    errors: dict[str, str] = {}
+    for name, project in projects.items():
+        try:
+            if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', name):
+                raise Failure('Invalid project name')
+            source = cast(Mapping[str, object], project).get('root')
+            if not isinstance(source, str) or not source:
+                raise Failure('Project root must be a nonempty string')
+            sources[name] = source
+            directory = relative(root, source, directory=True)
+            info = directory.stat()
+            directories[name] = directory
+            aliases.setdefault((info.st_dev, info.st_ino), []).append(name)
+        except Exception as error:  # noqa: BLE001 - preserve other projects without exposing raw diagnostics
+            errors[name] = (
+                str(error) if isinstance(error, Failure) else f'Invalid project root ({type(error).__name__})'
+            )
+    for names in aliases.values():
+        if len(names) > 1:
+            for name in names:
+                errors[name] = 'Duplicate project root: ' + ', '.join(sorted(names))
+
+    def execute(name: str, source: str) -> list[Result]:
+        if name in errors:
+            return [Result(provider, provider, source, 'error', detail=errors[name], project=name)]
+        rows = guarded(provider, provider, source, lambda: PROVIDERS[provider](options, directories[name], timeout))
+        return [replace(row, project=name) for row in rows]
+
+    return [
+        (provider, name, sources.get(name, '.'), lambda name=name: execute(name, sources.get(name, '.')))
+        for name in projects
+    ]
 
 
 def find_root(start: Path, marker: str) -> Path:
@@ -314,7 +378,7 @@ def report(results: Sequence[Result], json_output: bool, no_color: bool = False)
 
     state, code = summary(results)
     counts = dict(sorted(Counter(row.state for row in results).items()))
-    document = {'schemaVersion': 1, 'state': state, 'counts': counts, 'results': [row.json() for row in results]}
+    document = {'schemaVersion': 2, 'state': state, 'counts': counts, 'results': [row.json() for row in results]}
 
     if json_output:
         print(json.dumps(document, indent=2))
@@ -331,7 +395,8 @@ def report(results: Sequence[Result], json_output: bool, no_color: bool = False)
                     suffix += f' (compatible {row.compatible})'
                 note = f' [{notes[row.detail]}]' if row.detail else ''
                 name = display_name(row.provider, row.name)
-                print(single_line(f'{row.provider}: {row.state} {name}{suffix}{note}'))
+                identity = f'{row.provider}/{row.project}' if row.project else row.provider
+                print(single_line(f'{identity}: {row.state} {name}{suffix}{note}'))
             for detail, note in notes.items():
                 print(f'{note}: {single_line(detail)}')
             print()
@@ -346,11 +411,12 @@ def report(results: Sequence[Result], json_output: bool, no_color: bool = False)
             highlight=False,
             width=None if sys.stdout.isatty() else 120,
         )
-        groups: dict[str, list[Result]] = {}
+        groups: dict[tuple[str, str], list[Result]] = {}
         for row in results:
-            groups.setdefault(row.provider, []).append(row)
-        for provider, rows in groups.items():
-            table = Table(title=provider, box=box.SQUARE, row_styles=['', 'on grey11'])
+            groups.setdefault((row.provider, row.project), []).append(row)
+        for (provider, project), rows in groups.items():
+            identity = f'{provider}/{project}' if project else provider
+            table = Table(title=Text(identity), box=box.SQUARE, row_styles=['', 'on grey11'])
             table.add_column('State', no_wrap=True, min_width=10)
             table.add_column('Dependency', no_wrap=True, overflow='ellipsis', max_width=64)
             table.add_column('Version', no_wrap=True, overflow='ellipsis', max_width=28)

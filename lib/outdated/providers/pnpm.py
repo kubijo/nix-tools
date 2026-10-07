@@ -30,7 +30,8 @@ class Update(TypedDict):
 def report(config: ProviderConfig, root: Path, timeout: float) -> Iterator[Result]:
     _ = relative(root, 'package.json')
     _ = relative(root, 'pnpm-lock.yaml')
-    with snapshot(root) as work:
+    with tempfile.TemporaryDirectory(prefix='nix-tools-pnpm-cache-') as cache, snapshot(root) as work:
+        env = {'XDG_CACHE_HOME': cache}
         projects = records(
             command_json(
                 [
@@ -45,6 +46,7 @@ def report(config: ProviderConfig, root: Path, timeout: float) -> Iterator[Resul
                 ],
                 work,
                 timeout,
+                env=env,
             )
         )
         if not projects:
@@ -60,7 +62,9 @@ def report(config: ProviderConfig, root: Path, timeout: float) -> Iterator[Resul
                 'devDependencies',
                 'optionalDependencies',
             )
-            manifest = command_json([config['exe'], 'pkg', 'get', *groups, '--json', '--dir', str(path)], path, timeout)
+            manifest = command_json(
+                [config['exe'], 'pkg', 'get', *groups, '--json', '--dir', str(path)], path, timeout, env=env
+            )
             if not isinstance(manifest, dict):
                 raise Failure('Unsupported pnpm manifest report')
             manifest = cast(dict[str, dict[str, str]], manifest)
@@ -85,6 +89,7 @@ def report(config: ProviderConfig, root: Path, timeout: float) -> Iterator[Resul
                         path,
                         timeout,
                         codes=(0, 1),
+                        env=env,
                     )
                     if (
                         not isinstance(data, dict)

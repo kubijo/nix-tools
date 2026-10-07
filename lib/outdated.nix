@@ -26,6 +26,7 @@ let
     isList
     isPath
     isString
+    match
     toJSON
     unsafeDiscardStringContext
     ;
@@ -44,13 +45,17 @@ let
       exe ? null,
       path ? ".github/workflows",
       lockFile ? "flake.lock",
+      projects ? null,
     }:
     assert lib.assertMsg (
       isBool enable && isString root && isString path && isString lockFile
     ) "outdated provider paths must be strings and enable must be boolean";
     assert lib.assertMsg (
       !enable
-      || ((exe == null || isString exe || isPath exe) && (package == null || lib.isDerivation package))
+      || (
+        (exe == null || isString exe || isPath exe)
+        && (exe != null || package == null || lib.isDerivation package)
+      )
     ) "outdated provider package must be a derivation and exe must be a string or path";
     {
       inherit
@@ -60,6 +65,7 @@ let
         exe
         path
         lockFile
+        projects
         ;
     };
   options =
@@ -143,6 +149,16 @@ let
     };
     githubActions = { };
   };
+  project =
+    {
+      root ? null,
+    }:
+    assert lib.assertMsg (
+      isString root && root != ""
+    ) "outdated project root must be a nonempty string";
+    {
+      inherit root;
+    };
   providers = lib.mapAttrs (
     name: _:
     let
@@ -162,6 +178,7 @@ let
           [
             "package"
             "exe"
+            "projects"
           ]
       ++ lib.optional (name == "nix") "lockFile"
       ++ lib.optional (name == "githubActions") "path";
@@ -169,7 +186,26 @@ let
     assert lib.assertMsg (
       isBool value || (isAttrs value && lib.all (key: lib.elem key fields) (lib.attrNames value))
     ) "outdated.${name}: supported fields are ${lib.concatStringsSep ", " fields}";
-    toggle provider value
+    assert lib.assertMsg (
+      !(isAttrs value && value ? projects && value ? root)
+    ) "outdated.${name}: root and projects are mutually exclusive";
+    let
+      opts = toggle provider value;
+    in
+    assert lib.assertMsg (
+      !opts.enable
+      || !(isAttrs value && value ? projects)
+      || (isAttrs opts.projects && opts.projects != { })
+    ) "outdated.${name}.projects must be a nonempty attribute set";
+    opts
+    // lib.optionalAttrs (opts.enable && opts.projects != null) {
+      projects = lib.mapAttrs (
+        projectName: value:
+        assert lib.assertMsg (match "[A-Za-z0-9][A-Za-z0-9_-]{0,63}" projectName != null)
+          "outdated.${name}: project names must be 1..64 letters, digits, underscores or hyphens, starting with a letter or digit";
+        checked project value
+      ) opts.projects;
+    }
   ) specs;
   active = lib.filterAttrs (_: item: item.enable) providers;
   executable =
@@ -241,17 +277,22 @@ let
       lib.length overrideNames == lib.length (lib.unique overrideNames)
     ) "outdated: releases, adapters and skips must have distinct names";
     {
-      schemaVersion = 1;
+      schemaVersion = 2;
       nvchecker = lib.getExe' toolPkgs.nvchecker "nvchecker";
       inherit treeRootFile;
       inherit (cfg) timeout concurrency githubApi;
       providers = lib.mapAttrs (
         name: opts:
-        (removeAttrs opts [
-          "enable"
-          "package"
-          "exe"
-        ])
+        (removeAttrs opts (
+          [
+            "enable"
+            "package"
+            "exe"
+            "projects"
+          ]
+          ++ lib.optional (opts.projects != null) "root"
+        ))
+        // lib.optionalAttrs (opts.projects != null) { inherit (opts) projects; }
         // {
           git = lib.getExe toolPkgs.gitMinimal;
         }
