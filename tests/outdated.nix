@@ -26,6 +26,19 @@ let
   };
   rejects = config: !(tryEval (deepSeq (project config).apps.outdated.program true)).success;
   clients = toolPkgs.writeText "outdated-clients.json" (toJSON {
+    multiProject =
+      (project {
+        nix = false;
+        concurrency = 2;
+        uv.projects = {
+          tooling.root = ".";
+          api.root = "src/api";
+        };
+        pnpm.projects = {
+          probe.root = "tools/web-probe";
+          app.root = "src/web/app";
+        };
+      }).apps.outdated.program;
     releaseExamples = [
       {
         name = "biome";
@@ -153,6 +166,30 @@ in
     assert !(lib.any (row: row.source == "lint.yaml") withMetadata.tools);
     assert (lib.head withMetadata.skips).skip == "Checked by the repository's release process";
     assert
+      let
+        projects =
+          (inventory {
+            outdated = {
+              nix = false;
+              uv = {
+                exe = "/explicit/uv";
+                package = throw "exe takes precedence";
+                projects = {
+                  tooling.root = ".";
+                  api.root = "src/api";
+                };
+              };
+            };
+          }).providers.uv;
+      in
+      projects.exe == "/explicit/uv"
+      && !(projects ? root)
+      &&
+        projects.projects == {
+          tooling.root = ".";
+          api.root = "src/api";
+        };
+    assert
       (lib.head withMetadata.releases).versionCommand == [
         "nix"
         "--version"
@@ -228,6 +265,27 @@ in
         };
       }
       { yarn.unknown = true; }
+      {
+        uv = {
+          root = ".";
+          projects.api.root = "src/api";
+        };
+      }
+      { uv.projects = { }; }
+      { pnpm.projects = null; }
+      { cargo.projects = [ ]; }
+      { composer.projects.app = { }; }
+      { npm.projects.app.root = ""; }
+      { yarn.projects.app.root = 1; }
+      { uv.projects."bad/name".root = "."; }
+      {
+        uv.projects.app = {
+          root = ".";
+          exe = "uv";
+        };
+      }
+      { nix.projects.app.root = "."; }
+      { githubActions.projects.app.root = "."; }
       { releases.bad = { }; }
       { adapters.bad = { }; }
       { skips.bad = " "; }

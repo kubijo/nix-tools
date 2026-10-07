@@ -42,6 +42,13 @@ class PnpmLock(TypedDict):
     snapshots: dict[str, object]
 
 
+class Report(TypedDict):
+    schemaVersion: int
+    state: str
+    counts: dict[str, int]
+    results: list[dict[str, str]]
+
+
 class Registry(http.server.BaseHTTPRequestHandler):
     denied_status: ClassVar[int] = 401
     release_status: ClassVar[int] = 200
@@ -50,6 +57,8 @@ class Registry(http.server.BaseHTTPRequestHandler):
     release_tags: ClassVar[tuple[str, ...]] = ('v1.0', 'v2.0', 'v3.0rc1', 'unrelated/v99.0')
     npm_name: ClassVar[str] = 'is-number'
     npm_versions: ClassVar[tuple[str, ...]] = ('5.0.0', '6.0.0', '7.0.0')
+    python_versions: ClassVar[tuple[str, ...]] = ('24.0', '25.0')
+    passwords: ClassVar[dict[str, str]] = {}
 
     def do_HEAD(self) -> None:
         if not self.path.endswith('.whl'):
@@ -73,7 +82,10 @@ class Registry(http.server.BaseHTTPRequestHandler):
             self.send_error(self.release_status)
             return
         if self.path.startswith('/private/'):
-            expected = 'Basic ' + base64.b64encode(b'fixture:fixture-password').decode()
+            password = next(
+                (value for prefix, value in self.passwords.items() if self.path.startswith(prefix)), 'fixture-password'
+            )
+            expected = 'Basic ' + base64.b64encode(f'fixture:{password}'.encode()).decode()
             if self.headers.get('Authorization') != expected:
                 self.send_response(self.denied_status)
                 self.send_header('WWW-Authenticate', 'Basic realm="fixture"')
@@ -172,7 +184,7 @@ class Registry(http.server.BaseHTTPRequestHandler):
                         'requires-python': '>=3.8',
                         'yanked': False,
                     }
-                    for v in ('24.0', '25.0')
+                    for v in self.python_versions
                 ],
             }
             content = 'application/vnd.pypi.simple.v1+json'
@@ -283,9 +295,15 @@ class NativeClients(unittest.TestCase):
     def js(self, name: str, value: object) -> None:
         _ = (self.root / name).write_text(json.dumps(value))
 
-    def generate(self, command: Sequence[str]) -> None:
+    def generate(self, command: Sequence[str], root: pathlib.Path | None = None) -> None:
         result = subprocess.run(
-            command, cwd=self.root, env=common.environment(), capture_output=True, text=True, timeout=30, check=False
+            command,
+            cwd=root or self.root,
+            env=common.environment(),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -320,6 +338,98 @@ class NativeClients(unittest.TestCase):
             | ({'packageManager': manager} if manager else {}),
         )
         _ = (self.root / '.npmrc').write_text(f'registry={self.registry}\n')
+
+    def test_multiple_independent_uv_and_pnpm_projects(self) -> None:
+        passwords = {f'/private/{name}/': f'{name}-password' for name in ('tooling', 'api', 'probe', 'app')}
+        environment = {'UV_KEYRING_PROVIDER': 'disabled', 'UV_HTTP_RETRIES': '0', 'npm_config_fetch_retries': '0'}
+        for name in ('tooling', 'api'):
+            environment[f'UV_INDEX_{name.upper()}_USERNAME'] = 'fixture'
+            environment[f'UV_INDEX_{name.upper()}_PASSWORD'] = f'{name}-password'
+        for name in ('probe', 'app'):
+            environment[f'{name.upper()}_AUTH'] = base64.b64encode(f'fixture:{name}-password'.encode()).decode()
+
+        with (
+            tempfile.TemporaryDirectory() as auth_directory,
+            patch.object(Registry, 'passwords', passwords),
+            patch.object(Registry, 'python_versions', ('23.0', '24.0', '25.0')),
+            patch.dict(os.environ, environment),
+        ):
+            userconfig = pathlib.Path(auth_directory) / '.npmrc'
+            auth_config = ''.join(
+                f'{self.registry.removeprefix("http:")}/private/{name}/:_auth=${{{name.upper()}_AUTH}}\n'
+                for name in ('probe', 'app')
+            )
+            _ = userconfig.write_text(auth_config)
+            os.environ['NPM_CONFIG_USERCONFIG'] = str(userconfig)
+            for name, path, version in (('tooling', '.', '24.0'), ('api', 'src/api', '23.0')):
+                root = self.root / path
+                root.mkdir(parents=True, exist_ok=True)
+                _ = (root / 'pyproject.toml').write_text(
+                    f'[project]\nname="{name}"\nversion="0.0.0"\nrequires-python=">=3.11"\ndependencies=["packaging=={version}"]\n'
+                    + f'[[tool.uv.index]]\nname="{name}"\nurl="{self.registry}/private/{name}/simple"\ndefault=true\n'
+                )
+                self.generate([settings['uv'], 'lock', '--no-cache', '--no-python-downloads'], root)
+                (root / '.venv').mkdir()
+                _ = (root / '.venv/installed').write_text('must remain unchanged')
+            for name, path, version in (('probe', 'tools/web-probe', '6.0.0'), ('app', 'src/web/app', '5.0.0')):
+                root = self.root / path
+                root.mkdir(parents=True)
+                _ = (root / 'package.json').write_text(
+                    json.dumps(
+                        {
+                            'name': name,
+                            'version': '0.0.0',
+                            'dependencies': {'is-number': version},
+                        }
+                    )
+                )
+                _ = (root / 'pnpm-lock.yaml').write_text(
+                    (fixtures / 'pnpm-lock.yaml').read_text().replace('6.0.0', version)
+                )
+                registry = f'{self.registry}/private/{name}/'
+                _ = (root / '.npmrc').write_text(f'registry={registry}\n')
+                (root / 'node_modules').mkdir()
+                _ = (root / 'node_modules/installed').write_text('must remain unchanged')
+
+            def invoke(expected: int) -> Report:
+                before = digest(self.root)
+                result = subprocess.run(
+                    [settings['multiProject'], '--root', str(self.root), '--json'],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                self.assertEqual(digest(self.root), before)
+                self.assertEqual(userconfig.read_text(), auth_config)
+                for password in passwords.values():
+                    self.assertNotIn(password, result.stdout)
+                document = cast(Report, json.loads(result.stdout))
+                self.assertEqual(document['schemaVersion'], 2)
+                return document
+
+            rows = invoke(1)['results']
+            self.assertEqual(
+                {(r['provider'], r['project'], r['name'], r['current']) for r in rows if r['state'] == 'outdated'},
+                {
+                    ('uv', 'tooling', 'packaging', '24.0'),
+                    ('uv', 'api', 'packaging', '23.0'),
+                    ('pnpm', 'probe', 'is-number', '6.0.0'),
+                    ('pnpm', 'app', 'is-number', '5.0.0'),
+                },
+            )
+            self.assertEqual({r['compatible'] for r in rows if r['project'] == 'app'}, {'5.0.0'})
+            self.assertEqual({r['compatible'] for r in rows if r['project'] == 'probe'}, {'6.0.0'})
+            with patch.dict(os.environ, {'APP_AUTH': base64.b64encode(b'fixture:wrong').decode()}):
+                rows = invoke(2)['results']
+            self.assertTrue(any(r['project'] == 'app' and r['state'] in ('error', 'unknown') for r in rows))
+            self.assertEqual({r['project'] for r in rows if r['state'] == 'outdated'}, {'tooling', 'api', 'probe'})
+            (self.root / 'src/api/uv.lock').unlink()
+            (self.root / 'src/web/app/package.json').unlink()
+            rows = invoke(2)['results']
+            self.assertEqual({r['project'] for r in rows if r['state'] == 'error'}, {'api', 'app'})
+            self.assertEqual({r['project'] for r in rows if r['state'] == 'outdated'}, {'tooling', 'probe'})
 
     def test_explicit_registry_entries_use_native_sources(self) -> None:
         catalog = {row['name']: row for row in cast(list[sources.ReleaseEntry], settings_document['releaseExamples'])}

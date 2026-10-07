@@ -38,10 +38,12 @@ class Result:
     version_url: str = dataclasses.field(default='', repr=False, compare=False)
     current_url: str = dataclasses.field(default='', repr=False, compare=False)
     detail_identifiers: tuple[str, ...] = dataclasses.field(default=(), repr=False, compare=False)
+    project: str = ''
 
     def json(self) -> dict[str, str]:
         return {
             'provider': self.provider,
+            'project': self.project,
             'name': self.name,
             'source': self.source,
             'state': self.state,
