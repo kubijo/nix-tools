@@ -8,6 +8,8 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-07
+
 ### Added
 
 - Opt-in `lint.deptry.projects` and `lint.basedpyright.projects` for independent Python project checks, with pinned
