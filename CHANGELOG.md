@@ -8,6 +8,8 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-14
+
 ### Added
 
 - Standalone `dirspec` package and app for TOML tree checks, metadata assertions, and annotated reports.
