@@ -31,7 +31,7 @@ result = subprocess.run(
         '-c',
         """
 import importlib.metadata, importlib.util, json, sys
-import packaging, yaml, tyro
+import packaging, yaml, tyro, wcmatch
 assert sys.version_info[:2] == (3, 14)
 assert 'types-pyyaml' not in {dist.metadata['Name'].lower() for dist in importlib.metadata.distributions()}
 print(json.dumps({name: importlib.util.find_spec(name) is not None for name in ('coverage', 'jinja2', 'editorconfig')}))

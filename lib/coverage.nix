@@ -1,4 +1,8 @@
-{ lib, toolPkgs }:
+{
+  lib,
+  toolPkgs,
+  python,
+}:
 {
   formatter,
   checker,
@@ -167,6 +171,6 @@ toolPkgs.writeShellApplication {
     toolPkgs.treefmt
   ];
   text = ''
-    exec ${toolPkgs.python3}/bin/python ${./coverage.py} ${metadata} "$@"
+    exec ${python}/bin/python ${./coverage.py} ${metadata} "$@"
   '';
 }

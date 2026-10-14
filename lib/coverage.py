@@ -1,6 +1,5 @@
 """Audit selections without running formatters, linters, or project tests."""
 
-import argparse
 import json
 import os
 import pathlib
@@ -8,7 +7,8 @@ import stat
 import subprocess
 import sys
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import NotRequired, TypedDict, cast
 
 
@@ -241,27 +241,39 @@ def report(config: Config) -> Audit:
     }
 
 
-class Arguments(argparse.Namespace):
-    config: str = ''
+@dataclass
+class Arguments:
+    config: pathlib.Path
+    """Audit configuration."""
     json: bool = False
+    """Emit the complete JSON audit."""
     check: bool = False
+    """Fail on gaps, untracked files, or unmapped checks."""
 
 
-def main() -> int:
-    if sys.argv[1] == '--record':
+def main(argv: Sequence[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments[:1] == ['--record']:
+        if len(arguments) < 2:
+            print('repo-coverage: --record requires a command', file=sys.stderr)
+            return 2
         with tempfile.NamedTemporaryFile(
             mode='w', suffix='.json', dir=os.environ['NIX_TOOLS_COVERAGE_RECORDS'], delete=False
         ) as output:
-            json.dump([sys.argv[2], sys.argv[3:]], output)
+            json.dump([arguments[1], arguments[2:]], output)
         return 0
-    parser = argparse.ArgumentParser(description=__doc__)
-    _ = parser.add_argument('config')
-    _ = parser.add_argument('--json', action='store_true', help='emit the complete machine-readable audit')
-    _ = parser.add_argument(
-        '--check', action='store_true', help='fail on gaps, untracked files, or unmapped project checks'
+
+    # Keep recorder startup independent of the CLI runtime.
+    import tyro
+
+    args = cast(Callable[..., Arguments], tyro.cli)(
+        Arguments,
+        prog='repo-coverage',
+        description=__doc__,
+        args=arguments,
+        config=(tyro.conf.PositionalRequiredArgs, tyro.conf.FlagCreatePairsOff),
     )
-    args = parser.parse_args(namespace=Arguments())
-    result = report(cast(Config, json.loads(pathlib.Path(args.config).read_text())))
+    result = report(cast(Config, json.loads(args.config.read_text())))
     if args.json:
         print(json.dumps(result, indent=2))
     else:

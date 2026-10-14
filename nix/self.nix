@@ -4,6 +4,8 @@ rec {
 
   exclude = [
     fixtures
+    # Example inputs retain their contents and permissions.
+    "examples/dirspec/tree/**"
     # Kept byte-exact as the Unlicense publishes it.
     "LICENSE.txt"
   ];

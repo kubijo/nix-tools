@@ -81,6 +81,8 @@
           ;
       };
 
+      dirspec = eachSystem (system: (api.packagesFor (toolPkgsFor system)).dirspec);
+
       # Consumed exactly as a consumer would, so the published entrypoint is the tested one.
       project = eachSystem (
         system:
@@ -99,13 +101,24 @@
           };
           lint = {
             python.configFile = ./pyproject.toml;
-            deptry.projects.nix-tools.sourceRoots = [ "lib/outdated" ];
+            deptry.projects.nix-tools.sourceRoots = [
+              "lib"
+              "lib/outdated"
+              "examples"
+            ];
             javascript = true;
           };
           coverage.projectChecks."lint:deptry-nix-tools" = {
-            includes = [ "lib/outdated/**/*.py" ];
+            includes = [
+              "lib/**/*.py"
+              "examples/**/*.py"
+            ];
+            exclude = [
+              "lib/debian-tool.py"
+              "lib/whitespace.py"
+            ];
             kind = "semantic";
-            description = "Python imports and declared dependencies for outdated reporting";
+            description = "Python imports and declared dependencies for helpers and examples";
           };
           outdated = {
             enable = true;
@@ -140,11 +153,25 @@
 
       formatter = eachSystem (system: project.${system}.formatter);
 
-      apps = eachSystem (system: project.${system}.apps);
+      packages = eachSystem (system: {
+        dirspec = dirspec.${system};
+      });
+
+      apps = eachSystem (
+        system:
+        project.${system}.apps
+        // {
+          dirspec = {
+            type = "app";
+            program = lib.getExe dirspec.${system};
+          };
+        }
+      );
 
       devShells = eachSystem (system: {
         default = (toolPkgsFor system).mkShellNoCC {
           packages = project.${system}.packages ++ [
+            dirspec.${system}
             (toolPkgsFor system).just
             (toolPkgsFor system).uv
             (toolPkgsFor system).basedpyright

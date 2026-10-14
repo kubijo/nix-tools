@@ -8,6 +8,7 @@ dependencies = [
     "pyyaml>=6.0.3",
     "rich>=15.0.0",
     "tyro>=1.0.0",
+    "wcmatch>=11.1",
 ]
 
 [dependency-groups]
@@ -30,6 +31,8 @@ quote-style = "single"
 
 [tool.deptry]
 known_first_party = ["terminal_env"]
+# These adapters use separate Python environments supplied by Nix.
+extend_exclude = ["^lib/(debian-tool|whitespace)[.]py$"]
 
 [tool.deptry.package_module_name_map]
 pyyaml = "yaml"
@@ -40,7 +43,7 @@ failOnWarnings = true
 enableTypeIgnoreComments = false
 pythonVersion = "3.14"
 pythonPlatform = "All"
-include = ["lib", "tests"]
+include = ["lib", "tests", "examples"]
 # Fixtures contain deliberate syntax, import, and dependency errors.
 exclude = ["tests/fixtures"]
 extraPaths = ["lib", "lib/outdated"]

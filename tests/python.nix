@@ -10,6 +10,7 @@ let
     fileset = lib.fileset.unions [
       ../pyproject.toml
       (lib.fileset.fileFilter (file: file.hasExt "py" || file.hasExt "pyi") ../lib)
+      (lib.fileset.fileFilter (file: file.hasExt "py" || file.hasExt "pyi") ../examples)
       (lib.fileset.difference (lib.fileset.fileFilter (
         file: file.hasExt "py" || file.hasExt "pyi"
       ) ./.) ./fixtures)
@@ -37,6 +38,11 @@ in
 {
   basedpyright-report = toolPkgs.runCommandLocal "basedpyright-report" { } ''
     ${python}/bin/python ${./basedpyright_report_test.py} ${source}/lib/basedpyright_report.py
+    touch "$out"
+  '';
+
+  coverage-cli = toolPkgs.runCommandLocal "coverage-cli" { } ''
+    ${python}/bin/python ${source}/tests/coverage_cli_test.py ${source}/lib
     touch "$out"
   '';
 

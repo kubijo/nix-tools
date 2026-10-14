@@ -25,6 +25,9 @@ in
   packagesFor = toolPkgs: {
     # Locally packaged tools unavailable from the selected nixpkgs set.
     debputy = toolPkgs.callPackage ../nix/debputy.nix { };
+    dirspec = toolPkgs.callPackage ../nix/dirspec.nix {
+      python = (pythonEnvsFor toolPkgs).runtime;
+    };
   };
   supportedSystems = if supportedSystems == null then [ ] else supportedSystems;
 
