@@ -8,6 +8,16 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+### Added
+
+- Standalone `dirspec` package and app for TOML tree checks, metadata assertions, and annotated reports.
+
+### Changed
+
+- Coverage CLI parsing uses tyro; its recorder retains a bare-Python runtime.
+- Refreshed nixpkgs, pyproject.nix, uv2nix, and the Python lockfile (MarkupSafe 3.0.4).
+- Repository dependency checking now covers shared Python helpers and runnable examples.
+
 ## [0.9.0] - 2026-10-07
 
 ### Added

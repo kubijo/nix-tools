@@ -1,0 +1,21 @@
+version = 1
+strict = true
+exclude = [".cache"]
+
+[paths]
+"." = { type = "directory" }
+"README.txt" = { type = "file", min_size = 1 }
+"bin/*" = { type = "file", mode_required = 0o100, mode_forbidden = 0o022, min_size = 1 }
+"share/**/*.json" = { type = "file", min = 0, max = 2 }
+"share/**/*.map" = { count = 0 }
+"logs" = { type = "directory", min = 0 }
+"logs/*.log" = { type = "file", min = 0, max_size = 1048576 }
+
+[paths."current"]
+type = "symlink"
+link_target = "bin/app"
+link_exists = true
+
+# Optional ownership checks:
+# owner = "root"
+# group = 0

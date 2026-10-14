@@ -75,6 +75,7 @@ inventories are separate opt-ins; standalone tool releases require explicit sour
 - [Python dependency checks](docs/reference.md#python-dependency-checks)
 - [HTML templates](docs/reference.md#html-templates) · [Salt and whitespace](docs/reference.md#saltjinja-and-whitespace)
 - [Custom tools](docs/reference.md#splicing-in-your-own-tools) · [Project checks](docs/reference.md#exported-checks)
+- [dirspec](docs/dirspec.md): TOML tree and metadata checks · [Examples](examples/dirspec/README.md)
 - [Grit](docs/reference.md#grit) · [ast-grep](docs/reference.md#ast-grep)
 - [Coverage audit](docs/reference.md#coverage-audit) · [Pinning and cache](docs/reference.md#pinning-and-cache)
 - [Changelog](CHANGELOG.md)

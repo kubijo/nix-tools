@@ -188,22 +188,28 @@ let
     // validate
   );
 
-  coverageReport = import ./coverage.nix { inherit lib toolPkgs; } {
-    inherit formatter src treeRootFile;
-    checker = fileChecker;
-    config = coverage;
-    customCheckers = lib.attrNames (lint.extraCheckers or { });
-    customFormatters = lib.attrNames (format.extraFormatters or { });
-    debian =
-      (toggle (import ./options.nix { inherit lib; }).debianCheckerOptions (lint.debian or false)).enable
-      && !((lint.extraProjectCheckers or { }) ? debian);
-    projectNames =
-      map (spec: "lint:${spec.name}") fileChecker.selection.projectCheckers
-      ++ map (step: "validate:${if lib.isString step then step else step.name or step.run}") (
-        validate.steps or [ ]
-      )
-      ++ map (step: "lint:${step.name}") structuralLintSteps;
-  };
+  coverageReport =
+    import ./coverage.nix
+      {
+        inherit lib toolPkgs;
+        python = (pythonEnvsFor toolPkgs).runtime;
+      }
+      {
+        inherit formatter src treeRootFile;
+        checker = fileChecker;
+        config = coverage;
+        customCheckers = lib.attrNames (lint.extraCheckers or { });
+        customFormatters = lib.attrNames (format.extraFormatters or { });
+        debian =
+          (toggle (import ./options.nix { inherit lib; }).debianCheckerOptions (lint.debian or false)).enable
+          && !((lint.extraProjectCheckers or { }) ? debian);
+        projectNames =
+          map (spec: "lint:${spec.name}") fileChecker.selection.projectCheckers
+          ++ map (step: "validate:${if lib.isString step then step else step.name or step.run}") (
+            validate.steps or [ ]
+          )
+          ++ map (step: "lint:${step.name}") structuralLintSteps;
+      };
 
   outdatedReport =
     import ./outdated.nix

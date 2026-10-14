@@ -120,6 +120,10 @@ rec {
       inherit lib toolPkgs system;
       python = (pythonEnvsFor toolPkgs).dev;
     }
+    // import ./dirspec.nix {
+      inherit api lib toolPkgs;
+      python = (pythonEnvsFor toolPkgs).dev;
+    }
     // import ./basedpyright.nix {
       inherit
         api
