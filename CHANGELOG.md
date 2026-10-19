@@ -8,6 +8,14 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+### Changed
+
+- Refreshed pinned nixpkgs and uv2nix.
+
+### Fixed
+
+- Fetch pinned debputy sources from Debian Snapshot so builds survive removal from Debian's rolling mirror.
+
 ## [0.10.0] - 2026-10-14
 
 ### Added

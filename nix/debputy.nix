@@ -10,7 +10,8 @@ python3Packages.buildPythonApplication rec {
   version = "0.1.95";
   pyproject = true;
   src = fetchurl {
-    url = "https://deb.debian.org/debian/pool/main/d/debputy/debputy_${version}.tar.xz";
+    # Debian's rolling mirror removes superseded releases; the snapshot preserves this pin.
+    url = "https://snapshot.debian.org/archive/debian/20260906T144454Z/pool/main/d/debputy/debputy_${version}.tar.xz";
     sha256 = "2d2e276f6290cf18fd8b02764f61ad6ecff9540a67fbe8ee50d71a7067f58f15";
   };
   build-system = [ python3Packages.hatchling ];
