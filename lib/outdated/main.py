@@ -49,6 +49,7 @@ STATE_STYLES = {
 IDENTIFIER_STYLE = Style(color='bright_white', bgcolor='grey30', bold=True)
 type Callback = Callable[[], object]
 type Job = tuple[str, str, str, Callback]
+type ProjectExpansion = Callable[[str, str, Path], list[Job]]
 
 
 class Adapter(TypedDict):
@@ -147,11 +148,16 @@ def jobs(config: Inventory, root: Path, client: Client) -> list[Job]:
         source = settings.get('root', '.')
         try:
             if provider in PROVIDERS:
-                output.extend(project_jobs(provider, settings, root, client.timeout))
+                output.extend(
+                    project_jobs(provider, settings, root, package_project(provider, settings, client.timeout))
+                )
+                continue
+            if provider == 'nix' and 'projects' in settings:
+                output.extend(project_jobs(provider, settings, root, nix_project(settings, client)))
                 continue
             directory = relative(root, source, directory=True)
             if 'projects' in settings:
-                raise Failure('Named projects are supported only for package-manager providers')
+                raise Failure('Named projects are supported only for package-manager and Nix providers')
             factory = {'nix': nix_jobs, 'githubActions': workflow_jobs}[provider]
             for name, callback in factory(provider_options(settings), directory, client):
                 add(provider, name, source, callback)
@@ -212,7 +218,57 @@ def provider_options(settings: ProviderSettings) -> ProviderConfig:
     return {key: value for key, value in settings.items() if isinstance(value, str)}
 
 
-def project_jobs(provider: str, settings: ProviderSettings, root: Path, timeout: float) -> list[Job]:
+def attributed(provider: str, name: str, source: str, callback: Callback, project: str) -> list[Result]:
+    return [replace(row, project=project) for row in guarded(provider, name, source, callback)]
+
+
+def package_project(provider: str, settings: ProviderSettings, timeout: float) -> ProjectExpansion:
+    options = provider_options(settings)
+
+    def expand(name: str, source: str, directory: Path) -> list[Job]:
+        def execute() -> list[Result]:
+            return attributed(
+                provider, provider, source, lambda: PROVIDERS[provider](options, directory, timeout), name
+            )
+
+        return [(provider, name, source, execute)]
+
+    return expand
+
+
+def nix_project(settings: ProviderSettings, client: Client) -> ProjectExpansion:
+    options = provider_options(settings)
+
+    def expand(name: str, source: str, directory: Path) -> list[Job]:
+        # Lock discovery runs here, so a broken project must not abort its siblings.
+        try:
+            inputs = list(nix_jobs(options, directory, client))
+        except Exception as error:  # noqa: BLE001 - preserve other projects without exposing raw diagnostics
+            detail = (
+                str(error) if isinstance(error, Failure) else f'Invalid provider inventory ({type(error).__name__})'
+            )
+            return [
+                (
+                    'nix',
+                    name,
+                    source,
+                    lambda: Result('nix', 'nix', source, 'error', detail=detail, project=name),
+                )
+            ]
+        return [
+            (
+                'nix',
+                label,
+                source,
+                lambda label=label, callback=callback: attributed('nix', label, source, callback, name),
+            )
+            for label, callback in inputs
+        ]
+
+    return expand
+
+
+def project_jobs(provider: str, settings: ProviderSettings, root: Path, expand: ProjectExpansion) -> list[Job]:
     projects = settings.get('projects', {'default': {'root': settings.get('root', '.')}})
     if not projects or ('projects' in settings and 'root' in settings):
         return [
@@ -223,7 +279,6 @@ def project_jobs(provider: str, settings: ProviderSettings, root: Path, timeout:
                 lambda: Result(provider, provider, '.', 'error', detail='Use root or nonempty projects, not both'),
             )
         ]
-    options = provider_options(settings)
     directories: dict[str, Path] = {}
     aliases: dict[tuple[int, int], list[str]] = {}
     sources: dict[str, str] = {}
@@ -249,16 +304,23 @@ def project_jobs(provider: str, settings: ProviderSettings, root: Path, timeout:
             for name in names:
                 errors[name] = 'Duplicate project root: ' + ', '.join(sorted(names))
 
-    def execute(name: str, source: str) -> list[Result]:
+    output: list[Job] = []
+    for name in projects:
+        source = sources.get(name, '.')
         if name in errors:
-            return [Result(provider, provider, source, 'error', detail=errors[name], project=name)]
-        rows = guarded(provider, provider, source, lambda: PROVIDERS[provider](options, directories[name], timeout))
-        return [replace(row, project=name) for row in rows]
-
-    return [
-        (provider, name, sources.get(name, '.'), lambda name=name: execute(name, sources.get(name, '.')))
-        for name in projects
-    ]
+            output.append(
+                (
+                    provider,
+                    name,
+                    source,
+                    lambda name=name, source=source: [
+                        Result(provider, provider, source, 'error', detail=errors[name], project=name)
+                    ],
+                )
+            )
+        else:
+            output.extend(expand(name, source, directories[name]))
+    return output
 
 
 def find_root(start: Path, marker: str) -> Path:

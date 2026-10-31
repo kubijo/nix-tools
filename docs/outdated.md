@@ -31,6 +31,9 @@ The command finds `treeRootFile` upward. It runs online, outside cached `checks`
 `--json` emits `schemaVersion = 2`, `state`, `counts`, and rows with `provider`, `project`, `name`, `source`, `state`,
 `current`, `compatible`, `latest`, `detail`. States: `up-to-date`, `outdated`, `ahead`, `pinned`, `skipped`, `unknown`,
 `blocked`, `error`. Unknown sources never count as current. Skips and pins stay visible without failing the report.
+Relative `path:` Nix inputs are skipped because there is no upstream version to compare; they do not make the report
+fail, even when the path points outside the declaring flake.
+
 `latest` means upstream availability; `compatible` is a candidate, not a tested upgrade.
 
 Schema 2 adds `project`: the configured name, `default` for legacy package-manager roots, or `""` for other providers.
@@ -52,7 +55,7 @@ entry unless `enable = false`. Providers accept repository-relative `root` (defa
 Native providers accept `package` or `exe`, which must satisfy the bundled client's CLI/JSON contract. Keep credentials
 in the runtime environment or native client configuration.
 
-Cargo, UV, npm, pnpm, Yarn and Composer also accept named projects:
+Nix, Cargo, UV, npm, pnpm, Yarn and Composer also accept named projects:
 
 ```nix
 outdated = {
@@ -64,13 +67,18 @@ outdated = {
     probe.root = "tools/web-probe";
     app.root = "src/web/app";
   };
+  nix.projects = {
+    default.root = ".";
+    qa.root = "qa";
+  };
 };
 ```
 
 `projects` must be nonempty and cannot be combined with provider-level `root`. Each project requires `root`, relative to
 the repository; absolute paths, parent traversal and escapes are rejected. Names use 1–64 letters, digits, `_` or `-`,
-starting with a letter or digit. Tool overrides remain provider-level. Without `projects`, existing configuration checks
-one `default` project.
+starting with a letter or digit. Package-manager tool overrides and Nix `lockFile` remain provider-level, so every Nix
+project uses the same lock filename within its own root. Without `projects`, package-manager configuration checks one
+`default` project, and Nix rows keep an empty `project`.
 
 Each project uses its own manifests, locks and registry configuration in an isolated copy, with runtime credentials
 inherited. Roots resolving to the same directory fail all aliases; distinct nested roots are allowed. A failed project
@@ -82,7 +90,7 @@ repository `.npmrc` files. See [pnpm authentication settings](https://pnpm.io/np
 
 | Provider        | Default | Source and limit                                                    |
 | --------------- | ------- | ------------------------------------------------------------------- |
-| `nix`           | On      | `flake.lock`; local sources need adapters.                          |
+| `nix`           | On      | `flake.lock`; relative paths skipped, other local need adapters.    |
 | `cargo`         | Off     | `Cargo.toml`/`Cargo.lock`; Git sources need policy.                 |
 | `uv`            | Off     | `pyproject.toml`/`uv.lock`; Git/URL/path sources need policy.       |
 | `npm`           | Off     | `package-lock.json`; no compatibility claim.                        |

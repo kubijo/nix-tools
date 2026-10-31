@@ -178,8 +178,8 @@ let
           [
             "package"
             "exe"
-            "projects"
           ]
+      ++ lib.optional (name != "githubActions") "projects"
       ++ lib.optional (name == "nix") "lockFile"
       ++ lib.optional (name == "githubActions") "path";
     in
