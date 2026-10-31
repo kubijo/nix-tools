@@ -190,6 +190,26 @@ in
           api.root = "src/api";
         };
     assert
+      let
+        flakes =
+          (inventory {
+            outdated.nix = {
+              lockFile = "custom.lock";
+              projects = {
+                default.root = ".";
+                qa.root = "qa";
+              };
+            };
+          }).providers.nix;
+      in
+      flakes.lockFile == "custom.lock"
+      && !(flakes ? root)
+      &&
+        flakes.projects == {
+          default.root = ".";
+          qa.root = "qa";
+        };
+    assert
       (lib.head withMetadata.releases).versionCommand == [
         "nix"
         "--version"
@@ -284,7 +304,14 @@ in
           exe = "uv";
         };
       }
-      { nix.projects.app.root = "."; }
+      { nix.projects = { }; }
+      {
+        nix = {
+          root = ".";
+          projects.qa.root = "qa";
+        };
+      }
+      { nix.projects.qa.exe = "nix"; }
       { githubActions.projects.app.root = "."; }
       { releases.bad = { }; }
       { adapters.bad = { }; }

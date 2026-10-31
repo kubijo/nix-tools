@@ -8,9 +8,17 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+### Added
+
+- Named Nix outdated projects, with per-project attribution and partial failure reporting. All projects use the same
+  provider-level lock filename.
+
 ### Changed
 
-- Refreshed pinned nixpkgs and uv2nix.
+- Refreshed pinned nixpkgs, pyproject.nix, uv2nix, build-system packages, and the Python lockfile.
+- Updated the CI checkout action to v7.0.1.
+- Outdated reports mark relative `path:` flake inputs as skipped rather than unknown, so these inputs no longer cause an
+  incomplete-report exit status.
 
 ### Fixed
 

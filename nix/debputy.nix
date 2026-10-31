@@ -41,8 +41,13 @@ python3Packages.buildPythonApplication rec {
     debputy-nix-tools = "debputy.nix_tools:main"'
   '';
   makeWrapperArgs = [
-    "--prefix PATH : ${lib.makeBinPath [ dpkg ]}"
-    "--set DPKG_DATADIR ${dpkg}/share/dpkg"
+    "--prefix"
+    "PATH"
+    ":"
+    (lib.makeBinPath [ dpkg ])
+    "--set"
+    "DPKG_DATADIR"
+    "${dpkg}/share/dpkg"
   ];
   # Debian's full tests exercise its package builder and require a Debian host.
   # The integration suite exercises the installed lint/format commands instead.

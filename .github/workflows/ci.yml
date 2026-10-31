@@ -23,7 +23,7 @@ jobs:
   hygiene:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
       - name: No fixture is gitignored
         run: |
           ignored=$(git ls-files --others --ignored --exclude-standard -- tests)
@@ -40,7 +40,7 @@ jobs:
         runner: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
       - uses: DeterminateSystems/determinate-nix-action@v3
         with:
           # runCommandLocal checks otherwise refuse cached build results.
@@ -58,7 +58,7 @@ jobs:
   compat:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
       - uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: |
@@ -76,7 +76,7 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
       - uses: DeterminateSystems/determinate-nix-action@v3
         with:
           extra-conf: |

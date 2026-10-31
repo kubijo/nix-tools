@@ -285,6 +285,11 @@ def nix_input(node: NixNode, label: str, config: Mapping[str, str], root: Path, 
             detail_identifiers=owners,
         )
 
+    if kind == 'path' and (path := locked.get('path', '')) and not path.startswith('/'):
+        return Result(
+            'nix', label, source, 'skipped', current, detail='Relative path input; no upstream version to compare'
+        )
+
     return Result(
         'nix', label, source, 'unknown', current, detail=f'Unsupported/local lock source: {kind}; supply an adapter'
     )

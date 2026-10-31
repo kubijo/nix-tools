@@ -261,6 +261,106 @@ class Projects(Fixture):
             rows = main.collect_jobs(config, self.root, network.Client())
         self.assertEqual([(r.provider, r.state) for r in rows], [('uv', 'error'), ('pnpm', 'up-to-date')])
 
+    def test_nix_projects_attribute_inputs_and_retain_partial_results(self) -> None:
+        for name in ('qa', 'broken'):
+            (self.root / name).mkdir()
+
+        def discover(
+            options: ProviderConfig, directory: pathlib.Path, _client: network.Client
+        ) -> Iterator[sources.SourceJob]:
+            self.assertEqual(options, {'exe': 'nix', 'lockFile': 'custom.lock'})
+            if directory.name == 'broken':
+                raise RuntimeError('private-secret')
+            yield 'pkgs', lambda: common.Result('nix', 'pkgs', 'custom.lock:pkgs', 'outdated', 'a', latest='b')
+            yield 'tools', Mock(side_effect=common.Failure('Git ref is missing or ambiguous'))
+
+        roots = {'default': '.', 'qa': 'qa', 'broken': 'broken', 'missing': 'missing'}
+        config = self.inventory(
+            {
+                'nix': {
+                    'exe': 'nix',
+                    'lockFile': 'custom.lock',
+                    'projects': {name: {'root': path} for name, path in roots.items()},
+                }
+            }
+        )
+        with patch.object(main, 'nix_jobs', side_effect=discover):
+            rows = main.collect_jobs(config, self.root, network.Client())
+        self.assertEqual(
+            [(r.project, r.name, r.state) for r in rows],
+            [
+                ('default', 'pkgs', 'outdated'),
+                ('default', 'tools', 'error'),
+                ('qa', 'pkgs', 'outdated'),
+                ('qa', 'tools', 'error'),
+                ('broken', 'nix', 'error'),
+                ('missing', 'nix', 'error'),
+            ],
+        )
+        self.assertEqual(rows[-1].detail, 'Required directory is missing: missing')
+        self.assertNotIn('private-secret', str([r.json() for r in rows]))
+        self.assertEqual(common.summary(rows), ('ERROR', 2))
+
+        legacy = self.inventory({'nix': {'exe': 'nix', 'lockFile': 'custom.lock'}})
+        with patch.object(main, 'nix_jobs', side_effect=discover):
+            rows = main.collect_jobs(legacy, self.root, network.Client())
+        self.assertEqual({r.project for r in rows}, {''})
+
+    def test_nix_projects_read_each_lock_and_classify_inputs(self) -> None:
+        for root in (self.root, self.root / 'qa'):
+            root.mkdir(exist_ok=True)
+            _ = (root / 'flake.nix').write_text('{}')
+            _ = (root / 'custom.lock').write_text('default' if root == self.root else 'qa')
+
+        lock: sources.NixLock = {
+            'root': 'root',
+            'nodes': {
+                'root': {'inputs': {'local': 'local', 'remote': 'remote'}},
+                'local': {'locked': {'type': 'path', 'path': '../shared', 'narHash': 'sha256:local'}},
+                'remote': {
+                    'locked': {'type': 'github', 'owner': 'example', 'repo': 'remote', 'rev': 'a' * 40},
+                    'original': {'ref': 'main'},
+                },
+            },
+        }
+        client = network.Client()
+        client.commit = Mock(return_value='b' * 40)
+        config = self.inventory(
+            {
+                'nix': {
+                    'exe': 'nix',
+                    'lockFile': 'custom.lock',
+                    'projects': {'default': {'root': '.'}, 'qa': {'root': 'qa'}},
+                }
+            }
+        )
+        discovered: list[str] = []
+
+        def metadata_report(
+            command: list[str], _directory: pathlib.Path, _timeout: float
+        ) -> dict[str, sources.NixLock]:
+            lock_path = pathlib.Path(command[command.index('--reference-lock-file') + 1])
+            self.assertEqual(lock_path.name, 'custom.lock')
+            discovered.append(lock_path.read_text())
+            return {'locks': lock}
+
+        with patch.object(sources, 'command_json', side_effect=metadata_report) as metadata:
+            rows = main.collect_jobs(config, self.root, client)
+
+        self.assertEqual(
+            [(row.project, row.name, row.state) for row in rows],
+            [
+                ('default', 'local', 'skipped'),
+                ('default', 'remote', 'outdated'),
+                ('qa', 'local', 'skipped'),
+                ('qa', 'remote', 'outdated'),
+            ],
+        )
+        self.assertEqual(common.summary(rows), ('OUTDATED', 1))
+        self.assertEqual(metadata.call_count, 2)
+        self.assertEqual(discovered, ['default', 'qa'])
+        self.assertEqual(client.commit.call_count, 2)
+
     def test_report_attribution_and_schema_boundary(self) -> None:
         rows = [
             common.Result('uv', 'same', 'uv.lock', 'outdated', '1', latest='2', project=name)
@@ -666,6 +766,13 @@ class Releases(Fixture):
         node['locked']['type'] = 'path'
         node['original'] = {}
         self.assertEqual(sources.nix_input(node, 'tools', {}, self.root, client).state, 'unknown')
+        node['locked']['path'] = '/elsewhere'
+        self.assertEqual(sources.nix_input(node, 'tools', {}, self.root, client).state, 'unknown')
+        node['locked']['path'] = '..'
+        relative_path = sources.nix_input(node, 'repository', {}, self.root, client)
+        self.assertEqual(relative_path.state, 'skipped')
+        self.assertIn('no upstream version', relative_path.detail)
+        self.assertEqual(common.summary([relative_path]), ('UP-TO-DATE', 0))
 
     def test_workflows_subpaths_reusable_and_local(self) -> None:
         _ = self.write(
