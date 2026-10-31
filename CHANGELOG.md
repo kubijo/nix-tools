@@ -8,6 +8,8 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-31
+
 ### Added
 
 - Named Nix outdated projects, with per-project attribution and partial failure reporting. All projects use the same
