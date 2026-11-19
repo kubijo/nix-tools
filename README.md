@@ -49,6 +49,10 @@ entry unless `enable = false`.
 ```nix
 format.php = true;
 lint.php.extraOptions = [ "--semantics" ];
+lint.phpstan.projects.client = {
+  php = pkgs.php;
+  configFile = "phpstan.neon";
+};
 
 format.nunjucks.includes = [ "*.html.njk" ];
 lint.nunjucks.includes = [ "*.html.njk" ];
@@ -71,7 +75,8 @@ inventories are separate opt-ins; standalone tool releases require explicit sour
 ## Reference
 
 - [Tools, options and exclusions](docs/reference.md)
-- [PHP and Debian packaging](docs/reference.md#php-and-debian-packaging)
+- [PHP and Debian packaging](docs/reference.md#php-and-debian-packaging) ·
+  [PHP type checks](docs/reference.md#php-type-checks)
 - [Python dependency checks](docs/reference.md#python-dependency-checks)
 - [HTML templates](docs/reference.md#html-templates) · [Salt and whitespace](docs/reference.md#saltjinja-and-whitespace)
 - [Custom tools](docs/reference.md#splicing-in-your-own-tools) · [Project checks](docs/reference.md#exported-checks)

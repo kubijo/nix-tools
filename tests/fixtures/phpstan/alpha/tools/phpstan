@@ -1,0 +1,9 @@
+#!/usr/bin/env php
+<?php
+
+if (ini_get('precision') !== '9') {
+    fwrite(STDERR, 'override did not use the selected PHP configuration');
+    exit(1);
+}
+
+echo 'relative override ran';

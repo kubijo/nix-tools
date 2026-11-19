@@ -1,0 +1,14 @@
+includes:
+    - ../phpstan-extension.php
+
+parameters:
+    level: max
+    paths:
+        - ../src
+    bootstrapFiles:
+        - ../bootstrap.php
+    scanDirectories:
+        - ../vendor/acme
+    tmpDir: ../.phpstan-cache
+    parallel:
+        maximumNumberOfProcesses: 1
