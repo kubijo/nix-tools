@@ -17,6 +17,10 @@ for this library `nix flake update` is a semantic change.
 - Refreshed Nix and Python dependencies, bumped nix-gritql to v0.7.0 and matched the Biome schema to 2.6.5.
 - Raised Python dependency minimums to the resolved stable versions and disabled prereleases.
 
+### Fixed
+
+- CI runs on pull requests and master pushes, avoiding duplicate feature-branch runs and cross-event cancellations.
+
 ## [0.11.0] - 2026-10-31
 
 ### Added

@@ -2,9 +2,7 @@ name: CI
 
 on:
   push:
-    # Naming `tags` alone would stop matching branches entirely.
-    branches: ["**"]
-    tags: ["v*"]
+    branches: ["master"]
   pull_request:
   # A nixpkgs bump reformats every repo downstream; find out on a schedule, not mid-release.
   schedule:
@@ -12,8 +10,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  # One string for a branch push and its own pull request, so the pair collapses to one run.
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  # Supersede older runs for this event/ref without cancelling other event types.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
