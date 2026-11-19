@@ -8,6 +8,8 @@ for this library `nix flake update` is a semantic change.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-19
+
 ### Added
 
 - Opt-in `lint.phpstan.projects` with explicit PHP runtimes and native configuration.
