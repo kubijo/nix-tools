@@ -40,6 +40,7 @@ in
   python ? false,
   deptry ? false,
   basedpyright ? false,
+  phpstan ? false,
   php ? false,
   debian ? false,
   whitespace ? false,
@@ -137,6 +138,7 @@ let
     }
     // (import ./deptry.nix { inherit lib toolPkgs; } deptry)
     // (import ./basedpyright.nix { inherit lib toolPkgs; } basedpyright)
+    // (import ./phpstan.nix { inherit lib toolPkgs; } phpstan)
     // extraProjectCheckers;
 
   fileCheckers = lib.attrValues (import ./checkers.nix { inherit lib toolPkgs args; } // spliced);

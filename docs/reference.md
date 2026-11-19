@@ -4,8 +4,8 @@
 
 - [Formatter tools](#repofmt) · [Lint tools](#repochk)
 - [Options](#options) · [Custom tools](#splicing-in-your-own-tools) · [Exported checks](#exported-checks)
-- [PHP and Debian](#php-and-debian-packaging) · [HTML templates](#html-templates) ·
-  [Salt and whitespace](#saltjinja-and-whitespace)
+- [PHP type checks](#php-type-checks) · [PHP and Debian](#php-and-debian-packaging) · [HTML templates](#html-templates)
+  · [Salt and whitespace](#saltjinja-and-whitespace)
 - [Coverage](#coverage-audit) · [Grit](#grit) · [ast-grep](#ast-grep) · [Pinning and cache](#pinning-and-cache)
 
 ## repofmt
@@ -82,6 +82,7 @@ second node.
 | `deptry`       | [deptry](https://deptry.com/)                  | named Python projects                    | ❌ off  |
 | `basedpyright` | [basedpyright](https://docs.basedpyright.com/) | configured Python projects               | ❌ off  |
 | `php`          | [`Mago`]                                       | `*.php` `*.inc`                          | ❌ off  |
+| `phpstan`      | [PHPStan](https://phpstan.org/)                | configured PHP projects                  | ❌ off  |
 | `debian`       | [`debputy`]                                    | project-scoped Debian metadata¹          | ❌ off  |
 | `salt`         | [`salt-lint`]                                  | `*.sls` `*.j2` `*.jinja`                 | ❌ off  |
 | `whitespace`   | [`editorconfig-checker`]                       | `*.sls` `*.j2` `*.jinja`                 | ❌ off  |
@@ -181,6 +182,43 @@ as `lint:basedpyright-<name>`.
 
 `reporter = "rich"` adds relative locations and terminal hyperlinks using a separate pinned runtime. Pipes and agents
 get plain text unless color is forced. The default is `"native"`.
+
+## PHP type checks
+
+Provide a Nix PHP environment and native configuration:
+
+```nix
+lint.phpstan.projects.client = {
+  php = pkgs.php;
+  configFile = "phpstan.neon";
+};
+```
+
+Runs once per project in lint, validate and the linting flake check. `root` defaults to the repository root;
+`configFile` must be a project-relative string. Both paths must exist inside their parent scope. Runs use the project
+root as cwd. [Native configuration](https://phpstan.org/config-reference) owns targets, exclusions, strictness, PHP
+version, baselines, bootstrap files, stubs and extensions. Generic file exclusions do not apply.
+
+Pinned PHPStan uses the supplied PHP's extensions and ini, ignoring ambient `PHPRC` and `PHP_INI_SCAN_DIR`. Optional
+fields: `package`, `exe` (wins), `extraOptions`, `outdated`. Complete CLI overrides may supply their own runtime; the
+selected PHP is first on `PATH`. Relative executables resolve from the project root. For Composer overrides, add the
+selected PHP to `check.runtimeInputs` and run `patchShebangs --build vendor/bin/phpstan` after copying dependencies.
+
+`extraOptions` accepts `--level`/`-l`, `--error-format`, `--autoload-file`/`-a`, `--memory-limit`, and progress,
+verbosity, ANSI, non-interactive, debug, Xdebug and `--fail-without-result-cache` switches. Configuration/target
+replacements, abbreviated options, fixes, baseline generation and non-analysis modes are rejected.
+
+Prepare dependencies before running apps; use `check.prepare` for sandboxed checks. No dependencies are installed:
+
+```nix
+exclude = [ "vendor/**" ]; # File tools skip dependencies; PHPStan can read their types.
+check.prepare = "cp -r ${composerDeps}/vendor ./vendor";
+```
+
+[Larastan](https://github.com/larastan/larastan) consumers must also prepare Laravel bootstrap state. PHPDoc supports
+local type analysis; HTTP response validation remains application code.
+
+Declare coverage as `lint:phpstan-<name>`, `kind = "semantic"`. `outdated` uses the shared explicit release metadata.
 
 ## PHP and Debian packaging
 

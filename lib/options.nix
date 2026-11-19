@@ -257,6 +257,48 @@ rec {
         ;
     };
 
+  phpstanOptions =
+    {
+      enable ? true,
+      projects ? { },
+    }:
+    {
+      inherit enable projects;
+    };
+
+  phpstanProjectOptions =
+    {
+      root ? ".",
+      configFile ? null,
+      php ? null,
+      package ? null,
+      exe ? null,
+      extraOptions ? [ ],
+      outdated ? null,
+    }:
+    let
+      relative = value: lib.isString value && value != "" && !(lib.hasPrefix "/" value);
+    in
+    assert lib.assertMsg (relative root) "phpstan: root must be a nonempty repository-relative string";
+    assert lib.assertMsg (relative configFile)
+      "phpstan: configFile must explicitly name a project-relative configuration file string";
+    assert lib.assertMsg (lib.isDerivation php)
+      "phpstan: php must explicitly provide a Nix PHP environment with bin/php";
+    assert lib.assertMsg (
+      lib.isList extraOptions && lib.all lib.isString extraOptions
+    ) "phpstan: extraOptions must be a list of strings";
+    {
+      inherit
+        root
+        configFile
+        php
+        package
+        exe
+        extraOptions
+        outdated
+        ;
+    };
+
   linkCheckerOptions =
     {
       enable ? true,

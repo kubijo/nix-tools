@@ -132,6 +132,14 @@ rec {
         toolPkgs
         ;
     }
+    // import ./phpstan.nix {
+      inherit
+        api
+        lib
+        system
+        toolPkgs
+        ;
+    }
     // import ./deptry.nix {
       inherit
         api
