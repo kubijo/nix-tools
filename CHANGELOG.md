@@ -12,6 +12,11 @@ for this library `nix flake update` is a semantic change.
 
 - Opt-in `lint.phpstan.projects` with explicit PHP runtimes and native configuration.
 
+### Changed
+
+- Refreshed Nix and Python dependencies, bumped nix-gritql to v0.7.0 and matched the Biome schema to 2.6.5.
+- Raised Python dependency minimums to the resolved stable versions and disabled prereleases.
+
 ## [0.11.0] - 2026-10-31
 
 ### Added
